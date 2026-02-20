@@ -1,0 +1,18 @@
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.40.0
+accelerate>=0.20.0
+
+# Image processing
+Pillow>=9.0.0
+numpy>=1.20.0
+
+# Model loading
+safetensors>=0.3.0
+
+# Optional: Attention kernels (install separately if needed)
+# xformers>=0.0.20  # For xformers attention
+# flash-attn>=2.0.0  # For flash attention
+# sageattention>=1.0.0  # For sage attention
+
