@@ -16,7 +16,7 @@ else:
     if os.path.exists(possible_path):
         sys.path.insert(0, possible_path)
 
-# Add parent directory so we can import framepack-oneframe-inference as a package
+# Add parent directory so we can import framepack-oneframe as a package
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Add src directory to path

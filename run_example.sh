@@ -16,18 +16,20 @@ PYTHON_BIN=${PYTHON_BIN:-python}
 
 # Example paths - UPDATE THESE to match your setup
 IMAGE_PATH="${IMAGE_PATH:-./input/input.png}"
-OUTPUT_PATH="${OUTPUT_PATH:-./output/edited_output.png}"
+OUTPUT_PATH="./output/edited_output_$(date +%Y%m%d_%H%M%S).png"
+CSV_PATH="./output/experiments.csv"
 DIT_MODEL="${DIT_MODEL:-/path/to/models/FramePackI2V_HY_bf16.safetensors}"
 VAE_MODEL="${VAE_MODEL:-/path/to/models/pytorch_model.pt}"
 TEXT_ENCODER1="${TEXT_ENCODER1:-/path/to/models/llava_llama3_fp16.safetensors}"
 TEXT_ENCODER2="${TEXT_ENCODER2:-/path/to/models/clip_l.safetensors}"
 IMAGE_ENCODER="${IMAGE_ENCODER:-/path/to/models/model.safetensors}"
 
+
 $PYTHON_BIN "$SCRIPT_DIR/src/cli_inference.py" \
   --image_path "$IMAGE_PATH" \
-  --prompt "the cat is playing with a black cat" \
-  --negative_prompt "blurry, low quality" \
+  --prompt "the cat is wearing a hat" \
   --output_path "$OUTPUT_PATH" \
+  --save_params "$CSV_PATH" \
   --target_index 9 \
   --infer_steps 25 \
   --seed 1234 \
@@ -41,4 +43,5 @@ $PYTHON_BIN "$SCRIPT_DIR/src/cli_inference.py" \
   --text_encoder1 "$TEXT_ENCODER1" \
   --text_encoder2 "$TEXT_ENCODER2" \
   --image_encoder "$IMAGE_ENCODER" \
-  --verbose
+  --verbose \
+  --device cuda:1

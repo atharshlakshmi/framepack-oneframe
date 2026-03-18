@@ -11,6 +11,7 @@ import argparse
 import time
 from pathlib import Path
 import numpy as np
+import csv
 
 # Add FramePack to path (configure via FRAMEPACK_PATH environment variable)
 framepack_path = os.environ.get("FRAMEPACK_PATH")
@@ -40,6 +41,8 @@ from inference_engine import SingleFrameImageEditor, GenerationConfig
 
 
 def main():
+    total_start_time = time.time()
+    
     parser = argparse.ArgumentParser(
         description="FramePack One-Frame Inference - Single Image Editing",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -105,6 +108,8 @@ def main():
                         help="Output image format")
     parser.add_argument("--verbose", action="store_true",
                         help="Print detailed progress")
+    parser.add_argument("--save_params", type=str, default=None,
+                        help="CSV file path to save/append generation parameters")
     
     args = parser.parse_args()
     
@@ -275,10 +280,47 @@ def main():
         else:
             output_pil.save(args.output_path, format="PNG")
         
+        # Save parameters to CSV if requested
+        if args.save_params:
+            params_csv_path = args.save_params
+            params_dict = {
+                "output_path": args.output_path,
+                "image_path": args.image_path,
+                "prompt": args.prompt,
+                "negative_prompt": args.negative_prompt,
+                "seed": args.seed,
+                "infer_steps": args.infer_steps,
+                "guidance_scale": args.guidance_scale,
+                "height": args.height,
+                "width": args.width,
+                "target_index": args.target_index,
+                "device": args.device,
+                "dtype": args.dtype,
+                "attn_mode": args.attn_mode,
+                "vae_tiling": args.vae_tiling,
+                "vae_chunk_size": args.vae_chunk_size,
+                "vae_spatial_tile_sample_min_size": args.vae_spatial_tile_sample_min_size,
+                "output_format": args.output_format,
+            }
+            
+            # Check if file exists to determine if we need to write header
+            file_exists = os.path.exists(params_csv_path)
+            
+            with open(params_csv_path, "a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=params_dict.keys())
+                if not file_exists:
+                    writer.writeheader()
+                writer.writerow(params_dict)
+            
+            if args.verbose:
+                print(f"  Parameters saved to: {params_csv_path}")
+        
         if args.verbose:
             print(f"  Output saved successfully")
+            total_elapsed = time.time() - total_start_time
             print("\n" + "=" * 60)
             print("✅ Generation complete!")
+            print(f"Total execution time: {total_elapsed:.2f} seconds ({total_elapsed/60:.2f} minutes)")
             print("=" * 60)
     except Exception as e:
         print(f"Error saving output: {e}")

@@ -1,6 +1,6 @@
 # FramePack One-Frame Inference
 
-Single-frame image editing using FramePack models. Transform images with text prompts using FramePack's video generation models adapted for one-frame inference.
+Research adaptation of FramePack for single-frame image inference. This project adapts [FramePack](https://github.com/lllyasviel/FramePack)'s video generation models to enable efficient one-frame inference for image editing tasks.
 
 ---
 
@@ -49,8 +49,8 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
 # 3. Clone repos
 git clone https://github.com/lllyasviel/FramePack.git
-git clone https://github.com/atharshlakshmi/framepack-oneframe-inference.git
-cd framepack-oneframe-inference
+git clone https://github.com/atharshlakshmi/framepack-oneframe.git
+cd framepack-oneframe
 
 # 4. Install dependencies
 pip install -r requirements.txt
@@ -77,7 +77,7 @@ export FRAMEPACK_PATH=/path/to/FramePack  # Environment variable
 cp .env.example .env  # Then edit .env
 # OR place FramePack as sibling directory
 
-# 7. Verify
+# 7. Verify (remember to change: os.environ['FRAMEPACK_PATH'])
 python -c "
 import os, sys
 os.environ['FRAMEPACK_PATH'] = '/path/to/FramePack'
@@ -100,7 +100,7 @@ parent_folder/                           # Your workspace
 │   │   └── pipelines/
 │   └── ...
 │
-└── framepack-oneframe-inference/       # This project
+└── framepack-oneframe/       # This project
     ├── src/                           # Source code
     │   ├── cli_inference.py           # Command-line interface
     │   ├── inference_engine.py        # Main inference orchestration
@@ -116,6 +116,7 @@ parent_folder/                           # Your workspace
     ├── README.md                      # This file
     ├── test_imports.py                # Import verification script
     ├── test_simple.py                 # Simple test script
+    ├── example.png                    # Example Image
     │
     ├── models/                        # Downloaded model weights (~50GB total)
     │   ├── framepack/
@@ -151,6 +152,7 @@ python src/cli_inference.py \
 ```
 
 **Or use the example script:**
+Change paths and arguments in `run_example.sh` based on your preferences.
 ```bash
 bash run_example.sh
 ```
@@ -222,8 +224,6 @@ python -c "import torch; print(torch.cuda.is_available())"
 This project depends on:
 - **FramePack** - Apache 2.0 License
 - **HunyuanVideo** - Tencent License
-- **Diffusers** - Apache 2.0 License
-
 ---
 
 ## Acknowledgments
@@ -231,6 +231,4 @@ This project depends on:
 - **[FramePack](https://github.com/lllyasviel/FramePack)** by lllyasviel - Core diffusers_helper implementation and packed models
 - **[musubi-tuner](https://github.com/kohya-ss/musubi-tuner)** by kohya-ss - Architecture reference for one-frame inference approach and optimization strategies (VAE tiling, fast weight loading)
 - **[HunyuanVideo](https://github.com/Tencent/HunyuanVideo)** by Tencent - Base models (VAE, text encoders)
-- **[Diffusers](https://github.com/huggingface/diffusers)** by HuggingFace - Model loading infrastructure
-- **[Transformers](https://github.com/huggingface/transformers)** by HuggingFace - Text encoder implementations
 ---
