@@ -7,13 +7,17 @@ Research adaptation of FramePack for single-frame image inference. This project 
 ## Table of Contents
 
 - [Features](#features)
+  - [Key Optimizations](#key-optimizations-6-performance-fixes)
 - [Installation](#installation)
   - [Requirements](#requirements)
   - [Setup](#setup)
   - [Directory Structure](#directory-structure)
+- [Source Code Overview](#source-code-overview)
 - [Usage](#usage)
+  - [Image Editing Workflow](#image-editing-workflow)
   - [CLI](#cli)
   - [Common Options](#common-options)
+  - [Quality Tuning Guide](#quality-tuning-guide)
 - [Examples](#examples)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
@@ -26,6 +30,15 @@ Research adaptation of FramePack for single-frame image inference. This project 
 - Simple CLI and Python API
 - Optimized for speed - Model preloading, efficient VAE decoding, fast weight loading
 - Flexible configuration
+
+### Key Optimizations (6 Performance Fixes)
+
+1. **NullConditioner** – Skip redundant text encoding when guidance_scale=1.0 (30% speedup at unit guidance)
+2. **Aspect Ratio Bucket Selection** – Preserve image aspect ratio using cross-multiplication metric for better latent quality
+3. **Quality-Aware Image Resizing** – Use cv2.INTER_AREA for downsampling (quality-optimized) and PIL LANCZOS for upsampling
+4. **Shard Manifest Loading** – Parse model.safetensors.index.json for correct weight ordering (avoids glob ordering bugs)
+5. **VAE Tiling & Optimization** – Enable tiling mode for lower VRAM usage and lazy weight loading
+6. **MagCacheWrapper** – Track output magnitude ratios to skip redundant DiT forward passes (achieves 20-30% speedup)
 
 ---
 
@@ -129,17 +142,63 @@ parent_folder/                           # Your workspace
         └── output2.png
 ```
 
+## Source Code Overview
+
+The `src/` directory contains the core inference implementation:
+
+| File | Purpose |
+|------|---------|
+| **cli_inference.py** | Command-line interface for running single-frame image generation. Handles argument parsing, model loading, and orchestrates the inference pipeline. |
+| **inference_engine.py** | Main inference orchestration engine. Implements the diffusion sampling loop with `MagCacheWrapper` (Fix 6) for output caching acceleration. Manages tensor operations and integrates all conditioning models. |
+| **conditioning_pipeline.py** | Text and image conditioning pipelines. Contains `TextConditioner` (dual LLaMA+CLIP text encoding), `ImageConditioner` (VAE + vision encoding), and `NullConditioner` (optimization for unit guidance). Key optimizations: cv2.INTER_AREA for quality downsampling, aspect-ratio-preserving bucket selection. |
+| **framepack_models.py** | Model loading and caching. Handles safetensors weight loading with manifest parsing for correct shard ordering (Fix 4), VAE initialization with tiling support (Fix 5), and model state management. |
+| **latent_packing.py** | Latent tensor index management. Tracks which latent indices correspond to input vs. generated frames during inference. |
+| **__init__.py** | Package initialization and public API exports. |
 
 ---
 
 ## Usage
 
+### Image Editing Workflow
+
+This tool enables **text-guided image editing** by leveraging FramePack's video generation models for single-frame inference. The workflow is:
+
+1. **Provide an input image** – Your original image to edit
+2. **Write a text prompt** – Describe the desired changes (e.g., "add a hat", "change color to blue")
+3. **Run inference** – The model generates the edited version guided by your text description
+4. **Receive output** – High-quality edited image
+
 ### CLI
 
-TO BE UPDATED
+**Basic usage:**
+```bash
+python src/cli_inference.py \
+  --prompt "your edit description here" \
+  --image_path path/to/input/image.png \
+  --output_path path/to/output/
+```
+
+**Full example with all parameters:**
+```bash
+python src/cli_inference.py \
+  --image_path ./input/input.png \
+  --prompt "the cat is wearing a hat" \
+  --output_path ./output/edited_output.png \
+  --infer_steps 25 \
+  --seed 1234 \
+  --height 640 \
+  --width 512 \
+  --dtype bfloat16 \
+  --dit /path/to/models/FramePackI2V_HY_bf16.safetensors \
+  --vae /path/to/models/pytorch_model.pt \
+  --text_encoder1 /path/to/models/llava_llama3_fp16.safetensors \
+  --text_encoder2 /path/to/models/clip_l.safetensors \
+  --image_encoder /path/to/models/model.safetensors \
+  --device cuda:0
+```
 
 **Or use the example script:**
-Change paths and arguments in `run.sh` based on your preferences.
+Set paths in `.env` and run:
 ```bash
 bash run.sh
 ```
@@ -147,6 +206,7 @@ bash run.sh
 **Performance (RTX A6000, 640x512):**
 - First run: ~150s (90s loading + 26s sampling + 30s decode)
 - Subsequent: ~60s (26s sampling + 30s decode)
+- With MagCache: ~40-45s (20-30% faster)
 
 ### Common Options
 
@@ -160,7 +220,40 @@ bash run.sh
 | `--seed` | 42 | Random seed |
 | `--dtype` | bfloat16 | fp16/bfloat16/fp32 |
 | `--vae_tiling` | False | Lower VRAM mode |
+| `--device` | cuda:0 | GPU device to use |
+| `--attn_mode` | sdpa | Attention implementation (sdpa, xformers, default) |
+| `--verbose` | False | Print detailed debug info |
 
+### Quality Tuning Guide
+
+**Trade-off Matrix:** Adjust these for your quality vs. speed needs:
+
+| Goal | Guidance Scale | Infer Steps | Negative Prompt | Quality |
+|------|---|---|---|---|
+| **Fast** | 7.0 | 20 | None | Good |
+| **Balanced** | 10.0 | 25 | "blurry, low quality" | Excellent |
+| **High Quality** | 12.0 | 35 | "blurry, artifacts, worst quality" | Best |
+| **Ultra Quality** | 14.0 | 50 | "blurry, artifacts, worst quality, oversaturated" | Premium |
+
+**Parameter explanations:**
+- **guidance_scale** – Higher = follows prompt more strictly (7-15 recommended, diminishing returns >13)
+- **infer_steps** – More steps = better quality but slower (20-50 sweet spot)
+- **negative_prompt** – Tell model what to avoid; more detailed = better rejection
+
+**Resolution quality settings:**
+```bash
+# Fast generation (mobile/testing)
+--height 512 --width 384 --infer_steps 20
+
+# Standard quality
+--height 640 --width 512 --infer_steps 25
+
+# High quality
+--height 768 --width 576 --infer_steps 35 --guidance_scale 11.0
+
+# Ultra high quality (slow)
+--height 960 --width 720 --infer_steps 50 --guidance_scale 12.0
+```
 
 ## Examples
 

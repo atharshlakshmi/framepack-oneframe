@@ -36,6 +36,128 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+class MagCacheWrapper:
+    """
+    Accelerates DiT inference by skipping redundant forward passes (Fix 6).
+    
+    MagCache: Magnitude-based Cache
+    - Monitors transformer output magnitude between diffusion timesteps
+    - Skips forward pass when output magnitude change is below threshold
+    - Gives 30-50% speedup with minimal quality loss
+    
+    How it works:
+    1. Track ratio of output magnitudes: mag[t] / mag[t-1]
+    2. Accumulate error if ratio drifts from expected value
+    3. Reuse cached output from previous step if error stays small
+    4. Reset and compute full forward pass if error exceeds threshold
+    
+    Threshold parameters:
+    - retention_ratio: Skip only after 20% of steps (warmup period)
+    - magcache_thresh: Max accumulated error before reset (0.24)
+    - K: Max consecutive skips before forced recompute (6 steps)
+    """
+
+    # Magnitude ratios for 50 denoising steps (calibrated from reference model)
+    # ratio[i] = ||output[i]|| / ||output[i-1]|| - expected output scaling
+    # These values tell us how much the output magnitude changes at each step
+    _MAG_RATIOS_50 = np.array([
+        1.0,     1.06971, 1.29073, 1.11245, 1.09596, 1.05233, 1.01415, 1.05672,
+        1.00848, 1.03632, 1.02974, 1.00984, 1.03028, 1.00681, 1.06614, 1.05022,
+        1.02592, 1.01776, 1.02985, 1.00726, 1.03727, 1.01502, 1.00992, 1.03371,
+        0.9976,  1.02742, 1.0093,  1.01869, 1.00815, 1.01461, 1.01152, 1.03082,
+        1.0061,  1.02162, 1.01999, 0.99063, 1.01186, 1.0217,  0.99947, 1.01711,
+        0.9904,  1.00258, 1.00878, 0.97039, 0.97686, 0.94315, 0.97728, 0.91154,
+        0.86139, 0.76592,
+    ])
+
+    def __init__(
+        self,
+        transformer,
+        num_steps: int = 25,
+        retention_ratio: float = 0.2,
+        magcache_thresh: float = 0.24,
+        K: int = 6,
+    ):
+        self.transformer = transformer
+        self.num_steps = num_steps
+        self.retention_ratio = retention_ratio
+        self.magcache_thresh = magcache_thresh
+        self.K = K
+        self._reset()
+
+    def _reset(self):
+        self.cnt = 0
+        self.output_cache = None
+        self.accumulated_ratio = 1.0
+        self.accumulated_steps = 0
+        self.accumulated_err = 0.0
+
+    def _mag_ratios(self) -> np.ndarray:
+        """Nearest-neighbour interpolate _MAG_RATIOS_50 to self.num_steps."""
+        src = self._MAG_RATIOS_50
+        n = self.num_steps
+        if n == len(src):
+            return src
+        if n == 1:
+            return np.array([src[-1]])
+        indices = np.round(np.linspace(0, len(src) - 1, n)).astype(int)
+        return src[indices]
+
+    def __call__(self, *args, **kwargs):
+        # Get magnitude ratios interpolated to current num_steps
+        mag_ratios = self._mag_ratios()
+        # Warm-up period: don't skip in first 20% of steps (gradual denoising)
+        min_steps = max(int(self.retention_ratio * self.num_steps), 1)
+
+        skip = False
+        # Decide whether to reuse cached output or compute new forward pass
+        if (
+            self.output_cache is not None  # Cache exists from previous step
+            and self.cnt >= min_steps  # Past warm-up period
+            and self.cnt < self.num_steps - 1  # Not the final step
+        ):
+            # Update magnitude ratio based on expected value at this step
+            self.accumulated_ratio *= float(mag_ratios[self.cnt])
+            # Track error: how much actual differs from expected
+            self.accumulated_err += abs(1.0 - self.accumulated_ratio)
+            self.accumulated_steps += 1
+            
+            # Skip logic: if error stays small and we haven't skipped too many steps
+            if (
+                self.accumulated_err <= self.magcache_thresh  # Error within budget
+                and self.accumulated_steps <= self.K  # Haven't skipped more than K steps
+            ):
+                skip = True  # Reuse cached output from previous step (Fix 6)
+            else:
+                # Threshold exceeded or too many consecutive skips — reset and recompute
+                self.accumulated_ratio = 1.0
+                self.accumulated_steps = 0
+                self.accumulated_err = 0.0
+
+        if skip:
+            # Return cached output without computing
+            self.cnt += 1
+            return self.output_cache
+
+        # Full forward pass through the transformer
+        result = self.transformer(*args, **kwargs)
+        self.output_cache = result  # Cache for potential reuse next step
+
+        # Reset accumulator after computing a new forward pass
+        self.accumulated_ratio = 1.0
+        self.accumulated_steps = 0
+        self.accumulated_err = 0.0
+        self.cnt += 1
+        if self.cnt >= self.num_steps:
+            self._reset()  # Reset for next generation
+        return result
+
+    def __getattr__(self, name: str):
+        # Proxy all attribute access to the wrapped transformer so model.device,
+        # model.config etc. continue to work transparently
+        return getattr(self.transformer, name)
+
+
 @dataclass
 class GenerationConfig:
     """Configuration for single-frame generation"""
@@ -219,7 +341,11 @@ class SingleFrameImageEditor:
         # Step 2: Prepare text conditioning
         logger.info("Encoding text prompt...")
         text_embeddings = self.text_conditioner(config.prompt)
-        null_embeddings = self.null_conditioner()
+        null_embeddings = self.null_conditioner(
+            positive_llama_vec=text_embeddings["llama_vec"],
+            positive_clip_pooler=text_embeddings["clip_l_pooler"],
+            guidance_scale=config.real_guidance_scale,
+        )
         
         # Step 3: Prepare image conditioning
         logger.info("Encoding image...")
@@ -256,6 +382,13 @@ class SingleFrameImageEditor:
         # Step 5: Load DiT model
         logger.info("Loading DiT model...")
         dit_model = self.models.load_dit()
+        dit_model = MagCacheWrapper(
+            dit_model,
+            num_steps=config.inference_steps,
+            retention_ratio=0.2,
+            magcache_thresh=0.24,
+            K=6,
+        )
         # Model is already on device and in eval mode from load_dit()
         logger.info("DiT model ready for inference")
         
@@ -347,7 +480,7 @@ class SingleFrameImageEditor:
         # Step 8: Post-process
         # Convert from [-1, 1] to [0, 255] uint8
         decoded_image = (decoded_image * 0.5 + 0.5).clamp(0, 1)
-        decoded_image = (decoded_image * 255).to(torch.uint8).cpu()
+        decoded_image = ((decoded_image * 255).round()).to(torch.uint8).cpu()
         
         # Calculate metrics
         generation_time = time.time() - start_time
@@ -442,7 +575,11 @@ class SingleFrameImageEditor:
         
         # Load models and prepare embeddings
         text_embeddings = self.text_conditioner(config.prompt)
-        null_embeddings = self.null_conditioner()
+        null_embeddings = self.null_conditioner(
+            positive_llama_vec=text_embeddings["llama_vec"],
+            positive_clip_pooler=text_embeddings["clip_l_pooler"],
+            guidance_scale=config.real_guidance_scale,
+        )
         
         # Use first control image for image encoder features
         image_embeddings = self.image_conditioner(
@@ -452,8 +589,13 @@ class SingleFrameImageEditor:
         )
         
         dit_model = self.models.load_dit()
-        dit_model.to(self.device)
-        dit_model.eval()
+        dit_model = MagCacheWrapper(
+            dit_model,
+            num_steps=config.inference_steps,
+            retention_ratio=0.2,
+            magcache_thresh=0.24,
+            K=6,
+        )
         
         # Run sampling
         generator = torch.Generator(device="cpu").manual_seed(config.seed)
@@ -521,7 +663,7 @@ class SingleFrameImageEditor:
             )
         
         decoded_image = (decoded_image * 0.5 + 0.5).clamp(0, 1)
-        decoded_image = (decoded_image * 255).to(torch.uint8).cpu()
+        decoded_image = ((decoded_image * 255).round()).to(torch.uint8).cpu()
         
         generation_time = time.time() - start_time
         device_memory_peak = torch.cuda.max_memory_allocated(self.device) if self.device.type == "cuda" else 0

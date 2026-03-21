@@ -27,17 +27,15 @@ IMAGE_ENCODER="${IMAGE_ENCODER:-/path/to/models/model.safetensors}"
 
 $PYTHON_BIN "$SCRIPT_DIR/src/cli_inference.py" \
   --image_path "$IMAGE_PATH" \
-  --prompt "the cat is wearing a hat" \
+  --prompt "the cat is dancing at the beach" \
   --output_path "$OUTPUT_PATH" \
   --save_params "$CSV_PATH" \
-  --target_index 9 \
+  --target_index 30 \
   --infer_steps 25 \
   --seed 1234 \
   --output_format png \
   --dtype bfloat16 \
   --attn_mode sdpa \
-  --height 640 \
-  --width 512 \
   --dit "$DIT_MODEL" \
   --vae "$VAE_MODEL" \
   --text_encoder1 "$TEXT_ENCODER1" \

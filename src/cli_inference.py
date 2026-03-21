@@ -80,11 +80,11 @@ def main():
     parser.add_argument("--target_index", type=int, default=9,
                         help="Target frame index in latent window")
     
-    # Resolution
-    parser.add_argument("--height", type=int, default=640,
-                        help="Output height (must be divisible by 64)")
-    parser.add_argument("--width", type=int, default=512,
-                        help="Output width (must be divisible by 64)")
+    # Resolution (optional - auto-detected from input image if not specified)
+    parser.add_argument("--height", type=int, default=None,
+                        help="Output height (must be divisible by 64). If not specified, auto-detected from input image")
+    parser.add_argument("--width", type=int, default=None,
+                        help="Output width (must be divisible by 64). If not specified, auto-detected from input image")
     
     # Model Configuration
     parser.add_argument("--device", type=str, default="cuda",
@@ -118,14 +118,41 @@ def main():
         print(f"Error: Input image not found: {args.image_path}")
         return 1
     
-    if args.height % 64 != 0 or args.width % 64 != 0:
-        print(f"Error: Height and width must be divisible by 64. Got {args.height}x{args.width}")
-        return 1
-    
     # Create output directory
     output_dir = os.path.dirname(args.output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
+    
+    # Load input image first to auto-detect dimensions
+    if args.verbose:
+        print("\n[1/5] Loading input image...")
+    
+    try:
+        input_image = Image.open(args.image_path).convert("RGB")
+        img_width, img_height = input_image.size  # PIL returns (width, height)
+        if args.verbose:
+            print(f"  Image size: {img_width}x{img_height}")
+    except Exception as e:
+        print(f"Error loading image: {e}")
+        return 1
+    
+    # Auto-detect dimensions from input image if not specified
+    if args.height is None:
+        # Round down to nearest multiple of 64
+        args.height = (img_height // 64) * 64
+        if args.verbose:
+            print(f"  Auto-detected height: {args.height} (from {img_height})")
+    
+    if args.width is None:
+        # Round down to nearest multiple of 64
+        args.width = (img_width // 64) * 64
+        if args.verbose:
+            print(f"  Auto-detected width: {args.width} (from {img_width})")
+    
+    # Validate that dimensions are divisible by 64
+    if args.height % 64 != 0 or args.width % 64 != 0:
+        print(f"Error: Height and width must be divisible by 64. Got {args.height}x{args.width}")
+        return 1
     
     if args.verbose:
         print("=" * 60)
@@ -144,18 +171,6 @@ def main():
         print(f"Dtype: {args.dtype}")
         print(f"Attention: {args.attn_mode}")
         print("=" * 60)
-    
-    # Load input image
-    if args.verbose:
-        print("\n[1/5] Loading input image...")
-    
-    try:
-        input_image = Image.open(args.image_path).convert("RGB")
-        if args.verbose:
-            print(f"  Image size: {input_image.size}")
-    except Exception as e:
-        print(f"Error loading image: {e}")
-        return 1
     
     # Initialize editor
     if args.verbose:

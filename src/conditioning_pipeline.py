@@ -15,6 +15,7 @@ import hashlib
 
 import torch
 import numpy as np
+import cv2
 from PIL import Image
 
 # Import from FramePack diffusers_helper only
@@ -35,58 +36,50 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def resize_image_to_bucket(image: Union[Image.Image, np.ndarray], bucket_reso: Tuple[int, int]) -> np.ndarray:
+def resize_image_to_bucket(
+    image: Union[Image.Image, np.ndarray],
+    bucket_reso: Tuple[int, int],
+) -> np.ndarray:
     """
-    Resize image to target bucket resolution.
-    
-    Upscales/downscales to match the short side, then crops the long side.
-    
-    Args:
-        image: PIL Image or numpy array (HWC)
-        bucket_reso: Target (width, height)
-        
-    Returns:
-        Numpy array in HWC format
+    Resize image to exactly fill bucket_reso (width, height) via scale-then-center-crop.
+    Uses cv2.INTER_AREA for downsampling (better quality) and PIL LANCZOS for upsampling.
+    Ported from musubi-tuner's implementation in image_video_dataset.py.
     """
     is_pil_image = isinstance(image, Image.Image)
     if is_pil_image:
         image_width, image_height = image.size
     else:
         image_height, image_width = image.shape[:2]
-    
+
     bucket_width, bucket_height = bucket_reso
     
     if bucket_reso == (image_width, image_height):
         return np.array(image) if is_pil_image else image
-    
-    # Resize to match short side
+
+    # Compute scale factor to cover the target resolution
     scale_width = bucket_width / image_width
     scale_height = bucket_height / image_height
     scale = max(scale_width, scale_height)
     
-    new_width = int(image_width * scale + 0.5)
-    new_height = int(image_height * scale + 0.5)
-    
-    # Resize image
+    # Compute resized dimensions with proper rounding
+    image_width = int(image_width * scale + 0.5)
+    image_height = int(image_height * scale + 0.5)
+
+    # Use appropriate resampling method based on scale direction
     if scale > 1:
+        # Upsampling: use LANCZOS
         image = Image.fromarray(image) if not is_pil_image else image
-        image = image.resize((new_width, new_height), Image.LANCZOS)
+        image = image.resize((image_width, image_height), Image.LANCZOS)
         image = np.array(image)
     else:
+        # Downsampling: use cv2.INTER_AREA for better quality
         image = np.array(image) if is_pil_image else image
-        if scale != 1:
-            from PIL import Image as PILImage
-            image = PILImage.fromarray(image).resize((new_width, new_height), PILImage.LANCZOS)
-            image = np.array(image)
-    
-    # Center crop to bucket size
-    if new_width > bucket_width:
-        left = (new_width - bucket_width) // 2
-        image = image[:, left:left + bucket_width]
-    if new_height > bucket_height:
-        top = (new_height - bucket_height) // 2
-        image = image[top:top + bucket_height, :]
-    
+        image = cv2.resize(image, (image_width, image_height), interpolation=cv2.INTER_AREA)
+
+    # Center-crop to target resolution using integer division
+    crop_left = (image_width - bucket_width) // 2
+    crop_top = (image_height - bucket_height) // 2
+    image = image[crop_top : crop_top + bucket_height, crop_left : crop_left + bucket_width]
     return image
 
 
@@ -128,6 +121,10 @@ class TextConditioner:
         """
         Encode text prompt into LLaMA and CLIP embeddings.
         
+        Dual-encoder approach:
+        - LLaMA (4096-dim): Rich semantic understanding for video generation
+        - CLIP-L (768-dim pooled): Aligned visual-semantic space for guidance
+        
         Args:
             prompt: Text prompt string
             
@@ -137,18 +134,19 @@ class TextConditioner:
                 - llama_attention_mask: [seq_len] tensor
                 - clip_l_pooler: [768] tensor
         """
-        # Check cache first
+        # Check cache first to avoid redundant encoding of same prompts
         if prompt in self._cache:
             llama_vec, clip_l_pooler = self._cache[prompt]
         else:
-            # Move encoders to device
+            # Save original device locations to restore later (text encoders often on CPU)
             original_device1 = self.text_encoder1.device
             original_device2 = self.text_encoder2.device
             
+            # Move encoders to computation device temporarily
             self.text_encoder1.to(self.device)
             self.text_encoder2.to(self.device)
             
-            # Encode with both encoders
+            # Encode with both encoders using autocast for memory efficiency
             with torch.autocast(device_type=self.device.type, dtype=self.text_encoder1.dtype), torch.no_grad():
                 llama_vec, clip_l_pooler = hunyuan.encode_prompt_conds(
                     prompt=prompt,
@@ -156,21 +154,21 @@ class TextConditioner:
                     text_encoder_2=self.text_encoder2,
                     tokenizer=self.tokenizer1,
                     tokenizer_2=self.tokenizer2,
-                    max_length=256,  # Standard FramePack value
+                    max_length=256,  # Standard FramePack value (full prompt semantic richness)
                 )
             
-            # Move to CPU for caching
+            # Move embeddings to CPU for caching (save GPU memory)
             llama_vec = llama_vec.cpu()
             clip_l_pooler = clip_l_pooler.cpu()
             
-            # Cache result
+            # Cache result to avoid re-encoding if same prompt appears again
             self._cache[prompt] = (llama_vec, clip_l_pooler)
             
-            # Move encoders back to original device
+            # Move encoders back to original device (usually CPU to save VRAM)
             self.text_encoder1.to(original_device1)
             self.text_encoder2.to(original_device2)
         
-        # Crop or pad to target sequence length
+        # Ensure sequence length matches model expectation (crop excess or pad with zeros)
         llama_vec, llama_attention_mask = crop_or_pad_yield_mask(llama_vec, length=self.max_seq_len)
         
         return {
@@ -223,6 +221,10 @@ class ImageConditioner:
         """
         Encode image into VAE latent and SiglipVision features.
         
+        Two-stream processing:
+        - VAE encoding: Compresses image to latent space (16 channels, 1/8 resolution)
+        - Vision encoding: Extracts semantic features (1152-dim) for spatial guidance
+        
         Args:
             image: PIL Image
             height: Target height
@@ -230,23 +232,27 @@ class ImageConditioner:
             
         Returns:
             Dictionary with:
-                - image_encoder_features: [1, 577, 1152] tensor
-                - start_latent: [1, 16, 1, H/8, W/8] tensor
+                - image_encoder_features: [1, 577, 1152] tensor (spatial features)
+                - start_latent: [1, 16, 1, H/8, W/8] tensor (compressed representation)
         """
-        # Convert to RGB and extract alpha channel if present
+        # Handle RGBA by extracting alpha channel for later mask processing
         if image.mode == "RGBA":
             alpha = image.split()[-1]
         else:
             alpha = None
         
+        # Convert to RGB for processing (VAE and encoders expect 3 channels)
         image = image.convert("RGB")
-        image_np = np.array(image)  # PIL to numpy, HWC
+        image_np = np.array(image)  # PIL to numpy, HWC format
         
-        # Resize to target resolution
+        # Resize to exact resolution using scale-then-center-crop with quality optimization
+        # Uses cv2.INTER_AREA for downsampling (better quality) - Fix 3
         image_np = resize_image_to_bucket(image_np, (width, height))
         
-        # Prepare tensor for VAE: normalize to [-1, 1] and format as NCFHW
+        # Prepare tensor for VAE: normalize uint8 [0,255] to float [-1, 1]
+        # Formula: x / 127.5 - 1.0 maps [0,255] -> [-1,1] (VAE's expected input range)
         image_tensor = torch.from_numpy(image_np).float() / 127.5 - 1.0  # -1 to 1.0, HWC
+        # Rearrange tensor: HWC -> CHW -> NCFHW (batch=1, channels=3, frames=1)
         image_tensor = image_tensor.permute(2, 0, 1)[None, :, None]  # HWC -> CHW -> NCFHW, N=1, C=3, F=1
         
         # Extract SiglipVision features
@@ -316,7 +322,8 @@ class ImageConditioner:
             ctrl_image_np = np.array(ctrl_image)
             
             # Resize to target resolution
-            ctrl_image_np = resize_image_to_bucket(ctrl_image_np, (width, height))
+            bucket_h, bucket_w = simple_bucket_selector(width, height)
+            ctrl_image_np = resize_image_to_bucket(ctrl_image_np, (bucket_w, bucket_h))
             
             # Prepare tensor for VAE
             ctrl_image_tensor = torch.from_numpy(ctrl_image_np).float() / 127.5 - 1.0
@@ -341,121 +348,105 @@ class ImageConditioner:
 
 class NullConditioner:
     """
-    Null conditioning for classifier-free guidance.
-    
-    Generates unconditional embeddings (empty prompt) for CFG.
-    Caches the result since it's always the same.
-    
-    Example:
-        conditioner = NullConditioner(models)
-        null_embeddings = conditioner()
+    Returns zero embeddings when guidance_scale == 1.0 (the distilled model default).
+    fm_wrapper (wrapper.py line 39) already replaces the negative prediction with zeros
+    at cfg_scale == 1.0, so encoding a prompt here is pure wasted compute.
+    Only encodes a real negative prompt when guidance_scale > 1.0.
     """
-    
-    def __init__(
-        self,
-        models: FramePackModels,
-        max_seq_len: int = 512,
-    ):
-        """
-        Initialize null conditioner.
-        
-        Args:
-            models: FramePackModels instance with loaded text encoders
-            max_seq_len: Maximum sequence length for LLaMA (default 512)
-        """
+
+    def __init__(self, models: FramePackModels, max_seq_len: int = 512):
         self.models = models
         self.max_seq_len = max_seq_len
         self.device = models.device
-        
-        # Cache for null embeddings (computed once)
         self._cache: Optional[Dict[str, torch.Tensor]] = None
-        
-        # Load tokenizers and encoders
-        (self.tokenizer1, self.text_encoder1), (self.tokenizer2, self.text_encoder2) = models.load_text_encoders()
-    
-    def __call__(self) -> Dict[str, torch.Tensor]:
-        """
-        Get null (unconditional) embeddings.
-        
-        Returns:
-            Dictionary with:
-                - llama_vec: [seq_len, 4096] tensor
-                - llama_attention_mask: [seq_len] tensor
-                - clip_l_pooler: [768] tensor
-        """
+        (self.tokenizer1, self.text_encoder1), (self.tokenizer2, self.text_encoder2) = (
+            models.load_text_encoders()
+        )
+
+    def __call__(
+        self,
+        positive_llama_vec: torch.Tensor,
+        positive_clip_pooler: torch.Tensor,
+        guidance_scale: float = 1.0,
+        negative_prompt: str = "",
+    ) -> Dict[str, torch.Tensor]:
+        if guidance_scale == 1.0:
+            # fm_wrapper discards these anyway — return correctly-shaped zeros
+            return {
+                "llama_vec": torch.zeros_like(positive_llama_vec),
+                "llama_attention_mask": torch.zeros(
+                    positive_llama_vec.shape[:2], dtype=torch.bool
+                ),
+                "clip_l_pooler": torch.zeros_like(positive_clip_pooler),
+            }
+
+        # guidance_scale > 1.0: encode the negative prompt (cached after first call)
         if self._cache is not None:
             return self._cache
-        
-        # Move encoders to device
+
         original_device1 = self.text_encoder1.device
         original_device2 = self.text_encoder2.device
-        
         self.text_encoder1.to(self.device)
         self.text_encoder2.to(self.device)
-        
-        # Encode empty prompt
-        empty_prompt = ""
+
         with torch.autocast(device_type=self.device.type, dtype=self.text_encoder1.dtype), torch.no_grad():
             llama_vec_n, clip_l_pooler_n = hunyuan.encode_prompt_conds(
-                prompt=empty_prompt,
+                prompt=negative_prompt,
                 text_encoder=self.text_encoder1,
                 text_encoder_2=self.text_encoder2,
                 tokenizer=self.tokenizer1,
                 tokenizer_2=self.tokenizer2,
                 max_length=256,
             )
-        
-        # Move to CPU for caching
+
         llama_vec_n = llama_vec_n.cpu()
         clip_l_pooler_n = clip_l_pooler_n.cpu()
-        
-        # Move encoders back to original device
         self.text_encoder1.to(original_device1)
         self.text_encoder2.to(original_device2)
-        
-        # Crop or pad to target sequence length
-        llama_vec_n, llama_attention_mask_n = crop_or_pad_yield_mask(llama_vec_n, length=self.max_seq_len)
-        
-        # Cache result
+
+        llama_vec_n, llama_attention_mask_n = crop_or_pad_yield_mask(
+            llama_vec_n, length=self.max_seq_len
+        )
+
         self._cache = {
             "llama_vec": llama_vec_n,
             "llama_attention_mask": llama_attention_mask_n,
             "clip_l_pooler": clip_l_pooler_n,
         }
-        
         return self._cache
-    
+
     def clear_cache(self):
-        """Clear the null embeddings cache"""
         self._cache = None
-        logger.info("NullConditioner cache cleared")
+
+
+# Copied verbatim from the original FramePack bucket_tools.py
+_BUCKET_OPTIONS_640 = [
+    (416, 960), (448, 864), (480, 832), (512, 768),
+    (544, 704), (576, 672), (608, 640), (640, 608),
+    (672, 576), (704, 544), (768, 512), (832, 480),
+    (864, 448), (960, 416),
+]
 
 
 def simple_bucket_selector(width: int, height: int) -> Tuple[int, int]:
     """
-    Simple resolution bucket selector.
+    Find the nearest resolution bucket by aspect ratio.
+    Uses cross-multiplication (same metric as FramePack bucket_tools.py).
+    Returns (bucket_height, bucket_width).
     
-    Snaps input resolution to nearest valid bucket.
-    FramePack supports buckets with dimensions divisible by 64.
-    
-    Args:
-        width: Desired width
-        height: Desired height
-        
-    Returns:
-        Tuple of (height, width) rounded to nearest bucket
+    Why cross-multiplication instead of area matching?
+    Cross-multiplication (abs(h1*w2 - w1*h2)) preserves aspect ratio,
+    not just close to the pixel area. This prevents picking a square bucket
+    for a 3:1 wide image when a 960x416 aspect-matching bucket exists.
     """
-    # Common FramePack buckets (height, width)
-    common_buckets = [
-        (256, 256), (384, 256), (512, 256), (640, 256),
-        (256, 384), (384, 384), (512, 384), (640, 384),
-        (256, 512), (384, 512), (512, 512), (640, 512), (768, 512),
-        (256, 640), (384, 640), (512, 640), (640, 640), (768, 640),
-        (256, 768), (384, 768), (512, 768), (640, 768), (768, 768),
-    ]
-    
-    # Find closest bucket by area
-    target_area = width * height
-    closest_bucket = min(common_buckets, key=lambda b: abs(b[0] * b[1] - target_area))
-    
-    return closest_bucket
+    min_metric = float("inf")
+    best_bucket = None
+    # Iterate through predefined buckets to find best aspect ratio match
+    for bucket_h, bucket_w in _BUCKET_OPTIONS_640:
+        # Cross-multiplication metric: abs(h_img * w_bucket - w_img * h_bucket)
+        # Minimizing this gives the closest aspect ratio (Fix 2)
+        metric = abs(height * bucket_w - width * bucket_h)
+        if metric <= min_metric:
+            min_metric = metric
+            best_bucket = (bucket_h, bucket_w)
+    return best_bucket

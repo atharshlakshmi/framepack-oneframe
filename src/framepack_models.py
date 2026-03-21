@@ -233,29 +233,58 @@ class FramePackModels:
         return dtype_map.get(dtype_str.lower(), torch.bfloat16)
     
     def _load_safetensors_with_splits(self, path: str) -> Dict[str, torch.Tensor]:
-        """Load safetensors file, supporting split files (e.g., model-00001-of-00002.safetensors)"""
+        """
+        Load safetensors from a single file or a sharded directory.
+        For sharded dirs, reads model.safetensors.index.json first (Fix 4).
+        
+        Why read the manifest instead of globbing?
+        - The manifest explicitly defines shard order (critical for correct model loading)
+        - Glob order varies by OS/filesystem and can lead to incorrect weight assignments
+        - LLaMA and DiT models ship with index.json precisely to avoid ambiguity
+        """
+        import json
+
         if not os.path.exists(path):
-            raise FileNotFoundError(f"Model file not found: {path}")
-        
-        # Check if it's a split file pattern
+            raise FileNotFoundError(f"Model path not found: {path}")
+
+        # Single file case
         if os.path.isfile(path):
-            # Single file
             return load_file(path)
-        
-        # Directory - look for split files
-        split_pattern = os.path.join(path, "*.safetensors")
-        split_files = sorted(glob.glob(split_pattern))
-        
+
+        # Directory case — check for shard manifest first
+        index_path = os.path.join(path, "model.safetensors.index.json")
+        if os.path.exists(index_path):
+            logger.info(f"Found shard manifest: {index_path}")
+            with open(index_path, "r") as f:
+                index = json.load(f)
+            # Parse manifest to get shards in correct order
+            # The index maps parameter names to shard filenames
+            # Iterate through weight_map values to extract unique shards in order (Fix 4)
+            seen = set()
+            shard_files = []
+            for shard_name in index["weight_map"].values():
+                if shard_name not in seen:
+                    seen.add(shard_name)
+                    # Shards appear in the order weights reference them
+                    shard_files.append(shard_name)
+            
+            # Load each shard in manifest order and merge state dicts
+            state_dict = {}
+            for shard_name in shard_files:
+                shard_path = os.path.join(path, shard_name)
+                logger.info(f"Loading shard: {shard_name}")
+                state_dict.update(load_file(shard_path))
+            return state_dict
+
+        # No manifest found — fall back to alphabetical glob (last resort)
+        # This is less reliable but works for some simple multi-file layouts
+        split_files = sorted(glob.glob(os.path.join(path, "*.safetensors")))
         if not split_files:
-            raise FileNotFoundError(f"No safetensors files found in {path}")
-        
-        # Load and merge all splits
+            raise FileNotFoundError(f"No safetensors files found in: {path}")
         state_dict = {}
         for split_file in split_files:
-            logger.info(f"Loading split file: {split_file}")
-            split_dict = load_file(split_file)
-            state_dict.update(split_dict)
-        
+            logger.info(f"Loading: {os.path.basename(split_file)}")
+            state_dict.update(load_file(split_file))
         return state_dict
     
     def load_dit(self, force_reload: bool = False) -> HunyuanVideoTransformer3DModelPacked:
@@ -325,65 +354,49 @@ class FramePackModels:
     
     def load_vae(self, force_reload: bool = False) -> AutoencoderKLHunyuanVideo:
         """
-        Load VAE (Variational Autoencoder) model.
+        Load VAE (Variational Autoencoder) for image compression/decompression.
         
-        Args:
-            force_reload: Force reload even if cached
-            
-        Returns:
-            AutoencoderKLHunyuanVideo instance
+        VAE role: Encodes images to latent space, decodes generated latents back to pixels.
+        Uses AutoencoderKLHunyuanVideo for Hunyuan model compatibility (Fix 5).
         """
         if "vae" in self._cache and not force_reload:
             return self._cache["vae"]
-        
+
         logger.info(f"Loading VAE from {self.model_paths['vae']}")
-        
         vae_path = self.model_paths["vae"]
         vae_dtype = torch.float16
-        
-        # Try loading from HuggingFace directory structure
-        if os.path.isdir(vae_path) and os.path.exists(os.path.join(vae_path, "vae", "config.json")):
-            logger.info("Loading VAE from directory with HuggingFace structure")
-            vae = AutoencoderKLHunyuanVideo.from_pretrained(
-                vae_path,
-                subfolder="vae",
-                torch_dtype=vae_dtype
-            )
-        elif os.path.isdir(vae_path) and os.path.exists(os.path.join(vae_path, "config.json")):
-            logger.info("Loading VAE from directory")
-            vae = AutoencoderKLHunyuanVideo.from_pretrained(
-                vae_path,
-                torch_dtype=vae_dtype
-            )
-        else:
-            # Load from local file by first loading default model, then loading weights
-            logger.info("Loading VAE from HuggingFace hub with local weights")
-            vae = AutoencoderKLHunyuanVideo.from_pretrained(
-                "hunyuanvideo-community/HunyuanVideo",
-                subfolder="vae",
-                torch_dtype=vae_dtype
-            )
-            
-            # Load weights if provided as file
-            if os.path.isfile(vae_path):
-                logger.info(f"Loading VAE weights from {vae_path}")
+
+        # Load from HuggingFace hub as foundation
+        logger.info("Loading VAE base model from HuggingFace")
+        vae = AutoencoderKLHunyuanVideo.from_pretrained(
+            "hunyuanvideo-community/HunyuanVideo",
+            subfolder="vae",
+            torch_dtype=vae_dtype
+        )
+
+        # Load local weights if provided (Fix 5 - load custom weights)
+        if os.path.isfile(vae_path):
+            logger.info(f"Loading VAE weights from {vae_path}")
+            if vae_path.endswith(".pt") or vae_path.endswith(".pth"):
                 state_dict = torch.load(vae_path, map_location="cpu")
-                vae.load_state_dict(state_dict, strict=True)
-        
-        # Enable slicing and tiling for memory efficiency
+                if isinstance(state_dict, dict) and "state_dict" in state_dict:
+                    state_dict = state_dict["state_dict"]
+            else:
+                state_dict = load_file(vae_path)
+            vae.load_state_dict(state_dict, strict=False)
+
+        # Enable tiling for memory efficiency during encoding/decoding
         if self.vae_tiling or self.vae_spatial_tile_sample_min_size is not None:
-            vae.enable_slicing()
             vae.enable_tiling()
-            logger.info("Enabled VAE slicing and tiling")
-        
+            logger.info("Enabled VAE tiling")
+
         vae.to(self.device, dtype=vae_dtype)
         vae.eval()
         vae.requires_grad_(False)
-        
+
         self._cache["vae"] = vae
         self._clear_cuda_cache()
-        
-        logger.info(f"VAE loaded successfully")
+        logger.info("VAE loaded successfully")
         return vae
     
     def load_text_encoders(self, force_reload: bool = False) -> Tuple[
