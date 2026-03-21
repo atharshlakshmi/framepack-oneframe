@@ -57,11 +57,11 @@ pip install -r requirements.txt
 
 # 5. Download models (using HuggingFace CLI)
 pip install huggingface-hub
-mkdir -p models/framepack models/hunyuanvideo
+mkdir -p models/
 
 # FramePack DiT (~24GB)
 huggingface-cli download lllyasviel/FramePack_F1_I2V_HY_20250503 \
-  FramePackI2V_HY_bf16.safetensors --local-dir models/framepack
+  FramePackI2V_HY_bf16.safetensors --local-dir models
 
 # HunyuanVideo models
 huggingface-cli download hunyuanvideo-community/HunyuanVideo \
@@ -69,7 +69,7 @@ huggingface-cli download hunyuanvideo-community/HunyuanVideo \
   text_encoder/model.safetensors \
   text_encoder_2/model.safetensors \
   image_encoder/model.safetensors \
-  --local-dir models/hunyuanvideo
+  --local-dir models
 
 # 6. Set FramePack path (choose one):
 export FRAMEPACK_PATH=/path/to/FramePack  # Environment variable
@@ -106,8 +106,8 @@ parent_folder/                           # Your workspace
     │   ├── inference_engine.py        # Main inference orchestration
     │   ├── framepack_models.py        # Model loading & management
     │   ├── conditioning_pipeline.py   # Text & image conditioning
-    │   ├── latent_packing.py         # Latent index management
-    │   └── __init__.py               # Package exports
+    │   ├── latent_packing.py          # Latent index management
+    │   └── __init__.py                # Package exports
     ├── requirements.txt               # Python dependencies
     ├── .env.example                   # Environment configuration template
     ├── .env                           # Local environment config (user-created)
@@ -118,14 +118,12 @@ parent_folder/                           # Your workspace
     ├── test_simple.py                 # Simple test script
     ├── example.png                    # Example Image
     │
-    ├── models/                        # Downloaded model weights (~50GB total)
-    │   ├── framepack/
-    │   │   └── FramePackI2V_HY_bf16.safetensors  # DiT model (~24GB)
-    │   └── hunyuanvideo/
-    │       ├── vae/pytorch_model.pt              # VAE (~941MB)
-    │       ├── text_encoder/model.safetensors    # LLaMA-3 (~15GB)
-    │       ├── text_encoder_2/model.safetensors  # CLIP-L (~235MB)
-    │       └── image_encoder/model.safetensors   # SiglipVision (~817MB)
+    ├── models/                               # Downloaded model weights (~50GB total)
+    │   ├── FramePackI2V_HY_bf16.safetensors  # DiT model (~24GB)
+    │   ├── vae/pytorch_model.pt              # VAE (~941MB)
+    │   ├── llava_llama3_fp16.safetensors     # LLaMA-3 (~15GB)
+    │   ├── clip_l.safetensors                # CLIP-L (~235MB)
+    │   └── model.safetensors                 # SiglipVision (~817MB)
     │
     └── output/                        # Generated images (created on first run)
         └── output2.png
@@ -138,23 +136,12 @@ parent_folder/                           # Your workspace
 
 ### CLI
 
-```bash
-python src/cli_inference.py \
-  --image_path ./input.png \
-  --prompt "make the person smile" \
-  --output_path ./output.png \
-  --dit ./models/framepack/FramePackI2V_HY_bf16.safetensors \
-  --vae ./models/hunyuanvideo/vae/pytorch_model.pt \
-  --text_encoder1 ./models/hunyuanvideo/text_encoder/model.safetensors \
-  --text_encoder2 ./models/hunyuanvideo/text_encoder_2/model.safetensors \
-  --image_encoder ./models/hunyuanvideo/image_encoder/model.safetensors \
-  --verbose
-```
+TO BE UPDATED
 
 **Or use the example script:**
-Change paths and arguments in `run_example.sh` based on your preferences.
+Change paths and arguments in `run.sh` based on your preferences.
 ```bash
-bash run_example.sh
+bash run.sh
 ```
 
 **Performance (RTX A6000, 640x512):**
