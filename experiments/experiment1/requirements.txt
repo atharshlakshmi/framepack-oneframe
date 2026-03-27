@@ -1,0 +1,22 @@
+# Ablation Study Requirements
+# Following protocol: LPIPS, SSIM, CLIP Score
+
+# Framework
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Image processing
+Pillow>=9.0.0
+numpy>=1.20.0
+
+# Data handling
+pandas>=2.0.0
+
+# Metrics (as specified in protocol)
+lpips>=0.1.4
+scikit-image>=0.20.0
+# CLIP for prompt adherence scoring
+# Install: pip install git+https://github.com/openai/CLIP.git
+
+# Utilities
+tqdm>=4.60.0

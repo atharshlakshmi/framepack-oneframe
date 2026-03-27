@@ -50,7 +50,6 @@ output/
 outputs/
 results/
 generated/
-*.png
 *.jpg
 *.jpeg
 *.mp4
