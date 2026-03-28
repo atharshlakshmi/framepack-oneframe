@@ -1,262 +1,171 @@
-# FramePack Ablation Study: Multi-Scale Controls
+# FramePack Ablation Study: Target Frame Index Optimization
 
-This directory contains the complete ablation study protocol to evaluate the contribution of multi-scale control hierarchies in FramePack One-Frame Inference.
+This directory contains an ablation study to optimize the target frame index for FramePack One-Frame Inference using paired image-instruction data.
 
 ## Study Overview
 
-**Research Question**: How much do the 2× and 4× upsampling control latents contribute to output quality and generation time?
+**Dataset**: InstructPix2Pix (20 samples from HuggingFace timbrooks/instructpix2pix-clip-filtered)
+
+**Research Question**: Which target frame index produces the best output quality and prompt adherence?
 
 **Conditions Tested**:
-- **FULL**: Full pipeline with 2× and 4× multi-scale controls enabled
-- **ABL-NO2X**: 2× controls disabled only
-- **ABL-NO4X**: 4× controls disabled only
-- **ABL-NONE**: Both controls disabled
-
-**Dataset**: COCO val2017 (20 sampled images with fixed seed)
+- **idx_9**: Target index = 9 (baseline)
+- **idx_12**: Target index = 12
+- **idx_15**: Target index = 15
+- **idx_20**: Target index = 20
 
 **Metrics Computed**:
-- **LPIPS**: Learned Perceptual Image Patch Similarity (perceptual distance)
-- **DSSIM**: Structural Dissimilarity (structural distance)
-- **Huber Distance**: Robust L1 loss (pixel-level distance)
-- **Entropy**: Shannon entropy of output (information content)
-- **Variance**: Local patch variance (smoothness)
-
-All metrics compare each ablation condition output **to the FULL condition output**, not to the original COCO image.
+- **CLIP Score**: Prompt-image alignment (higher = better prompt adherence)
+- **SSIM**: Structural Similarity Index (compared to idx_9 baseline)
+- **LPIPS**: Perceptual difference from idx_9 baseline
+- **Performance**: Generation time and GPU memory usage
 
 ## Quick Start
 
-### Option 1: Bash Script (Recommended)
+### Run the Study
 
 ```bash
-# Full run with all steps
-./run_ablation_study.sh
+# Full run (loads InstructPix2Pix from HuggingFace)
+bash run_ablation_study.sh
 
-# Skip download if dataset already exists
-./run_ablation_study.sh --skip-download
-
-# Skip download and sampling (uses existing data)
-./run_ablation_study.sh --skip-download --skip-sampling
-
-# Verbose output
-./run_ablation_study.sh --verbose
+# Or run Python directly
+python run_ablation_study.py
 ```
 
-### Option 2: Manual Steps
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# 1. Download COCO val2017 (~1 GB)
-python download_coco.py
-
-# 2. Sample 20 images with fixed seed
-python sample_images.py
-
-# 3. Run inference for all 4 conditions
-python run_inference.py
-
-# 4. Compute metrics
-python compute_metrics.py
-```
-
-### Option 3: Python Script
-
-```bash
-python run_ablation_study.py [--skip-download] [--skip-sampling] [--force] [--verbose]
-```
+The dataset is automatically downloaded from HuggingFace on first run.
 
 ## File Structure
 
-After consolidation, the directory contains:
+After running the experiment:
 
 ```
-experiment1/
-├── run_ablation_study.sh              # Bash entry point
-├── run_ablation_study.py              # Main orchestrator
-├── helpers.py                         # ★ All consolidated utilities
-│   ├── download_coco()
-│   ├── sample_images()
-│   ├── run_all_inference()
-│   ├── compute_all_metrics()
-│   └── metric functions (LPIPS, SSIM)
-│
-├── config_template.py                 # Configuration template
-├── requirements.txt                   # Dependencies
-├── README.md                          # This file
-├── SETUP_GUIDE.md                     # Quick start
-├── .gitignore
-│
-├── coco_data/                         # Downloaded COCO dataset
-├── ablation_study/                    # Results
-│   ├── images/                        # 20 sampled images
-│   ├── prompts.csv                    # Metadata + captions
-│   ├── outputs/
-│   │   ├── FULL/
-│   │   ├── ABL-NO2X/
-│   │   ├── ABL-NO4X/
-│   │   └── ABL-NONE/
-│   └── metrics.csv                    # RESULTS
+ablation_study/
+├── images/                            # 20 InstructPix2Pix paired samples (original_image)
+├── prompts.csv                        # Image metadata + edit instructions (edit_prompt)
+├── idx_9/                             # Generated images (target_index=9)
+├── idx_12/                            # Generated images (target_index=12)
+├── idx_15/                            # Generated images (target_index=15)
+├── idx_20/                            # Generated images (target_index=20)
+└── metrics/
+    └── results.csv                    # ★ Per-image metrics table
 ```
+
+## Results CSV Format
+
+`ablation_study/metrics/results.csv` contains one row per image-index pair (80 total rows):
+
+| Column | Description | Example |
+|--------|-------------|---------|
+| condition | Index condition | idx_9, idx_12, idx_15, idx_20 |
+| img_id | Image ID | img_001–img_020 |
+| prompt | Edit instruction from dataset | "make the sky more blue" |
+| output_path | Path to generated image | ablation_study/idx_9/img_001_generated.png |
+| total_inference_time | End-to-end generation (seconds) | 18.5 |
+| peak_vram_gb | GPU memory usage (GB) | 24.3 |
+| clip_score | Prompt adherence (higher=better) | 0.82 |
+| ssim | Similarity to idx_9 baseline (higher=better) | 0.91 |
+| lpips | Perceptual distance from idx_9 (lower=better) | 0.045 |
+| error_flag | Generation success | False |
 
 ## Fixed Inference Configuration
 
-All 4 conditions use identical inference parameters to isolate only the effect of multi-scale controls:
+All 4 index conditions use identical parameters except target_index:
 
 ```
-  seed:                42
-  infer_steps:         25
-  guidance_scale:      10.0
-  real_guidance_scale: 1.0
-  height × width:      640 × 512
-  dtype:               bfloat16
-  attn_mode:           sdpa
-  target_index:        9
-  control_indices:     [1, 10]
-  MagCache:            enabled
-  VAE tiling:          disabled
+seed:             42
+infer_steps:      25
+guidance_scale:   10.0
+height × width:   640 × 512
+dtype:            bfloat16
+attn_mode:        sdpa
+control_indices:  [1, 10]
+target_index:     [9, 12, 15, 20]  ← Only parameter that varies
 ```
 
-## Reproducibility Notes
-
-⚠️ **CRITICAL**: The image sampling uses `seed=42` for reproducibility. **Never re-run `sample_images.py`** once you've generated the initial sample. The prompt list must remain identical across all conditions.
-
-If you need to restart from scratch:
+## Running the Study
 
 ```bash
-# Completely reset the study
-rm -rf ablation_study/
-rm -rf coco_data/
-
-# Then run from the beginning
-./run_ablation_study.sh
+cd /mnt/hdd2/atharshlakshmi/framepack-oneframe/experiments/experiment1
+bash run_ablation_study.sh
 ```
 
-## Understanding the Results
+**Expected runtime**: ~3-4 hours (4 indices × 20 images on RTX A6000)
 
-### metrics.csv Structure
+## Analyzing Results
 
-```
-condition,img_id,lpips,dssim,huber,entropy_abl,variance_abl
-FULL,img_001,0.0,0.0,0.0,5.234,0.0125
-ABL-NO2X,img_001,0.043,0.018,0.032,5.156,0.0118
-ABL-NO4X,img_001,0.021,0.009,0.015,5.189,0.0121
-ABL-NONE,img_001,0.067,0.031,0.051,5.098,0.0115
-...
-```
-
-### Interpreting Metrics
-
-Lower values are better for all metrics (except entropy, which is descriptive):
-
-- **LPIPS < 0.05**: Imperceptible difference from FULL
-- **LPIPS 0.05-0.10**: Slight perceptual difference
-- **LPIPS > 0.10**: Noticeable perceptual difference
-
-- **DSSIM < 0.01**: Very similar structure
-- **DSSIM 0.01-0.05**: Moderate structural change
-- **DSSIM > 0.05**: Significant structural change
-
-- **Huber < 0.05**: Minimal pixel-level changes
-- **Huber 0.05-0.15**: Moderate pixel-level changes
-- **Huber > 0.15**: Major pixel-level changes
-
-### Aggregate Statistics
-
-After computing metrics, you can analyze:
+After running, compare metrics across indices:
 
 ```python
 import pandas as pd
 
-df = pd.read_csv('ablation_study/metrics.csv')
+df = pd.read_csv('ablation_study/metrics/results.csv')
 
-# Average metrics by condition
-print(df.groupby('condition')[['lpips', 'dssim', 'huber']].mean())
+# Average metrics by index
+print(df.groupby('condition')[['clip_score', 'ssim', 'lpips', 'total_inference_time']].mean())
 
-# Percentage change from FULL (baseline)
-full_metrics = df[df['condition'] == 'FULL'].groupby('img_id')[['lpips', 'dssim', 'huber']].mean()
-for cond in ['ABL-NO2X', 'ABL-NO4X', 'ABL-NONE']:
-    abl_metrics = df[df['condition'] == cond].groupby('img_id')[['lpips', 'dssim', 'huber']].mean()
-    pct_increase = (abl_metrics - full_metrics) / full_metrics * 100
-    print(f"\n{cond} vs FULL:")
-    print(pct_increase.describe())
+# Which index has best CLIP score?
+best_idx = df.groupby('condition')['clip_score'].mean().idxmax()
+print(f"Best for prompt adherence: {best_idx}")
 ```
 
-## Implementation Details
+**Interpretation**:
+- **CLIP Score > 0.75**: Good instruction adherence
+- **SSIM > 0.90**: Very similar to baseline idx_9
+- **LPIPS < 0.05**: Negligible perceptual difference
 
-### How Multi-Scale Controls Work
+## Implementation
 
-FramePack uses hierarchical conditioning with latent controls at multiple upsampling levels:
+The study uses:
 
-1. **2× upsampling latents**: Control at intermediate resolution
-2. **4× upsampling latents**: Control at higher resolution
-3. When disabled: Information is only from the base latent level
+1. **helpers.py**: InstructPix2Pix dataset loading from HuggingFace, metrics computation, CSV logging
+2. **run_ablation_study.py**: Main orchestrator (loops through 4 indices)
+3. **run_cli_inference()**: Subprocess wrapper that passes `--target_index` parameter
 
-Setting `one_frame_flags = set()` (FULL) enables multi-scale.
-Setting `one_frame_flags = {'no_2x', 'no_4x'}` (ABL-NONE) uses only base latents.
+**Dataset Pipeline**:
+```
+InstructPix2Pix (HuggingFace: timbrooks/instructpix2pix-clip-filtered)
+  → Load dataset with datasets library
+  → Sample 20 pairs with seed=42 (original_image + edit_prompt)
+  → Save to ablation_study/images/ and prompts.csv
+  → Run inference for each original_image × 4 indices with edit_prompt
+  → Compute metrics vs idx_9 baseline
+```
 
-### Metrics Implementation
+**Dataset Fields**:
+- `original_image`: PIL Image (input to FramePack)
+- `edit_prompt`: str (editing instruction passed to FramePack)
+- `edited_image`: PIL Image (ground truth - not used for ablation, just reference)
 
-- **LPIPS**: Approximated using normalized image gradient L2 distance (full LPIPS requires pretrained network)
-- **DSSIM**: Structural Similarity computed with Gaussian kernel
-- **Huber**: Robust loss function (less sensitive to outliers than L2)
-- **Entropy**: Shannon entropy in pixel value distribution
-- **Variance**: Average patch-wise variance for smoothness evaluation
-
-For production use, consider:
-- Installing `lpips` library for accurate LPIPS: `pip install lpips`
-- Using `pytorch-ssim` for optimized SSIM: `pip install pytorch-ssim`
+**Metrics**:
+- CLIP Score: Image-text similarity (CLIP embeddings)
+- SSIM: Structural similarity (scikit-image)
+- LPIPS: Perceptual distance (L1 on normalized representations)
 
 ## Troubleshooting
 
-### Out of Memory (OOM)
-
-If you get OOM errors during inference:
-1. Reduce image resolution in `run_inference.py` (height, width)
-2. Reduce batch size (if implemented)
-3. Enable VAE tiling: set `vae_tile_size = 256`
-
-### Missing Dataset
-
-```
-ERROR: Captions file not found: coco_data/annotations/captions_val2017.json
+**HuggingFace authentication**: If dataset doesn't download:
+```bash
+huggingface-cli login  # Then enter your token
 ```
 
-Solution: Run `python download_coco.py` first
+**OOM errors**: Check `nvidia-smi`, reduce `--infer_steps` in helpers.py
 
-### Prompts CSV Not Found
+**Slow generation**: Monitor GPU with `watch -n 1 nvidia-smi`
 
+**Import errors**: Ensure `datasets` package is installed:
+```bash
+pip install -r requirements.txt
 ```
-ERROR: Prompts CSV not found: ablation_study/prompts.csv
-```
-
-Solution: Run `python sample_images.py` after downloading
-
-### Slow Inference
-
-- Check GPU availability: `nvidia-smi`
-- Consider using `--skip-sampling` to reuse existing data
-- Monitor memory usage during generation
 
 ## Next Steps
 
-1. **Analyze Results**: Review `metrics.csv` for quality degradation patterns
-2. **Visual Inspection**: Compare generated images in `outputs/` subdirectories
-3. **Speed Profiling**: Add timing code to `run_inference.py` to measure generation speed
-4. **Extended Study**: Run on full COCO validation set (5,000 images) for statistical significance
-5. **Other Ablations**: Study other pipeline components (MagCache, attention modes, guidance scales)
-
-## References
-
-- [COCO Dataset](https://cocodataset.org/)
-- [Ablation Study Protocol](../working_md/experiment1.md)
-- [FramePack Documentation](../../README.md)
-
-## Contact
-
-For questions about this ablation study, refer to the protocol document: `../working_md/experiment1.md`
+1. **Compare CLIP Scores**: Which index has best instruction adherence?
+2. **Visual Inspection**: Compare generated images across all 4 indices
+3. **Extend Study**: Test with more indices or different guidance scales
+4. **Scaling**: Run on full InstructPix2Pix train split for more samples
 
 ---
 
-*Last Updated: 2026-03-27*
-*Study: Multi-Scale Controls in FramePack One-Frame Inference*
+*Last Updated: 2026-03-29*
+*Study: Target Frame Index Optimization using InstructPix2Pix Dataset*
+*Data Source: HuggingFace timbrooks/instructpix2pix-clip-filtered*

@@ -13,6 +13,9 @@ from pathlib import Path
 import numpy as np
 import csv
 
+# Add src/ directory to path (for framepack_models, inference_engine imports)
+sys.path.insert(0, os.path.dirname(__file__))
+
 # Add FramePack to path (configure via FRAMEPACK_PATH environment variable)
 framepack_path = os.environ.get("FRAMEPACK_PATH")
 if framepack_path:

@@ -138,8 +138,17 @@ parent_folder/                           # Your workspace
     │   ├── clip_l.safetensors                # CLIP-L (~235MB)
     │   └── model.safetensors                 # SiglipVision (~817MB)
     │
-    └── output/                        # Generated images (created on first run)
-        └── output2.png
+    ├── output/                        # Generated images (created on first run)
+    │   └── output2.png
+    │
+    ├── experiments/                   # Research experiments & ablations
+    │   ├── README.md                  # **See here for experiment documentation**
+    │   ├── experiment1/               # Individual experiment folders
+    │   └── ...
+    │
+    └── documentation/                 # Detailed documentation
+        ├── technical_summary.md       # Comprehensive implementation details
+        └── simplified_summary.md      # FramePack adaptation guide for non-technical readers
 ```
 
 ## Source Code Overview

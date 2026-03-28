@@ -20,18 +20,58 @@ Usage:
 import argparse
 import sys
 import logging
+import os
 from pathlib import Path
-from typing import List
+from typing import List, Dict
+from dotenv import load_dotenv
 
 from helpers import (
-    download_coco,
-    sample_images,
+    load_instructpix2pix,
     run_all_inference,
-    compute_all_metrics,
     load_prompts_csv,
 )
 
+# Load environment variables from .env file
+env_path = Path(__file__).parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
+else:
+    # Try parent directory
+    env_path = Path(__file__).parent.parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+
 logger = logging.getLogger(__name__)
+
+
+def find_model_paths() -> Dict[str, str]:
+    """Try to find FramePack models in common locations."""
+    
+    models_dir = Path(__file__).parent.parent.parent / "models"
+    
+    if not models_dir.exists():
+        logger.warning(f"Models directory not found: {models_dir}")
+        return {}
+    
+    # Expected model files
+    model_map = {
+        'dit': 'FramePack_F1_I2V_HY_20250503.safetensors',
+        'vae': 'pytorch_model.pt',
+        'text_encoder1': 'llava_llama3_fp16.safetensors',
+        'text_encoder2': 'clip_l.safetensors',
+        'image_encoder': 'model.safetensors',
+    }
+    
+    model_paths = {}
+    for key, filename in model_map.items():
+        model_path = models_dir / filename
+        if model_path.exists():
+            model_paths[key] = str(model_path)
+            logger.info(f"✓ Found {key}: {filename}")
+        else:
+            logger.warning(f"✗ Missing {key}: {filename}")
+    
+    return model_paths if len(model_paths) == len(model_map) else {}
 
 
 def run_step(description: str, func, *args, **kwargs) -> bool:
@@ -79,29 +119,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Full run with all steps
+  # Full run
   python run_ablation_study.py
-  
-  # Skip download if dataset already exists
-  python run_ablation_study.py --skip-download
-  
-  # Skip both download and sampling
-  python run_ablation_study.py --skip-download --skip-sampling
         """
     )
-    
-    parser.add_argument(
-        '--skip-download',
-        action='store_true',
-        help='Skip COCO dataset download (use existing coco_data/)'
-    )
-    parser.add_argument(
-        '--skip-sampling',
-        action='store_true',
-        help='Skip image sampling (use existing ablation_study/images/)'
-    )
-    
-    args = parser.parse_args()
     
     # Setup logging
     logging.basicConfig(
@@ -112,13 +133,13 @@ Examples:
     logger.info("=" * 60)
     logger.info("FramePack Ablation Study")
     logger.info("=" * 60)
-    logger.info("Multi-Scale Controls in One-Frame Inference")
+    logger.info("Target Frame Index Optimization")
     logger.info("")
     logger.info("Study Protocol:")
-    logger.info("  Dataset: COCO val2017 (20 sampled images)")
-    logger.info("  Conditions: FULL, ABL-NO2X, ABL-NO4X, ABL-NONE")
-    logger.info("  Quality Metrics: LPIPS, SSIM, CLIP Score")
-    logger.info("  Speed Metrics: diffusion_time, peak_vram_gb, total_inference_time")
+    logger.info("  Dataset: InstructPix2Pix (20 paired image-instruction samples)")
+    logger.info("  Conditions: idx_9, idx_12, idx_15, idx_20")
+    logger.info("  Quality Metrics: CLIP Score, SSIM, LPIPS")
+    logger.info("  Performance: total_inference_time, peak_vram_gb")
     logger.info("=" * 60)
     
     # Check prerequisites
@@ -128,84 +149,41 @@ Examples:
     
     logger.info("✓ All files present\n")
     
-    # Step 1: Download COCO
-    if not args.skip_download:
-        if not run_step("Download COCO val2017 dataset", download_coco):
-            return 1
-    else:
-        logger.info("\n[SKIPPED] COCO download (using existing coco_data/)")
+    # Step 1: Load InstructPix2Pix Dataset
+    if not run_step("Load InstructPix2Pix dataset", load_instructpix2pix):
+        return 1
     
-    # Step 2: Sample images
-    if not args.skip_sampling:
-        if not run_step("Sample 20 images", sample_images):
-            return 1
-    else:
-        logger.info("\n[SKIPPED] Image sampling (using existing ablation_study/)")
+    # Step 2: Run inference (requires models)
+    logger.info("\nDetecting FramePack models...")
+    model_paths = find_model_paths()
     
-    # Step 3: Run inference
-    if not run_step("Run inference for all conditions", 
+    if not model_paths:
+        logger.error("✗ Models not found. All 5 required models must be present:")
+        logger.error("  - FramePack_F1_I2V_HY_20250503.safetensors (dit)")
+        logger.error("  - pytorch_model.pt (vae)")
+        logger.error("  - llava_llama3_fp16.safetensors (text_encoder1)")
+        logger.error("  - clip_l.safetensors (text_encoder2)")
+        logger.error("  - model.safetensors (image_encoder)")
+        logger.error(f"  Expected location: ../models/")
+        return 1
+    
+    logger.info(f"✓ Found all {len(model_paths)}/5 required models")
+    if not run_step("Run inference for all index conditions", 
                     run_all_inference,
                     "ablation_study/images",
                     "ablation_study/prompts.csv",
-                    "ablation_study/outputs"):
+                    "ablation_study",
+                    model_paths):
         return 1
     
-    # Step 4: Compute metrics
+    # Step 3: Compute metrics
     logger.info(f"\n{'='*60}")
     logger.info("Step: Compute ablation metrics")
     logger.info(f"{'='*60}")
-    
-    outputs_base_dir = Path("ablation_study/outputs")
-    conditions = ['ABL-NO2X', 'ABL-NO4X', 'ABL-NONE']
-    full_dir = outputs_base_dir / 'FULL'
-    
-    all_results = []
-    
-    for condition in conditions:
-        abl_dir = outputs_base_dir / condition
-        metrics_results = compute_all_metrics(
-            str(full_dir),
-            str(abl_dir),
-            condition,
-        )
-        all_results.extend(metrics_results)
-    
-    # Save results to CSV
-    if all_results:
-        import csv
-        
-        all_keys = set()
-        for result in all_results:
-            all_keys.update(result.keys())
-        
-        fieldnames = ['condition', 'img_id'] + sorted([k for k in all_keys if k not in ['condition', 'img_id']])
-        
-        metrics_csv = Path("ablation_study/metrics.csv")
-        logger.info(f"\nSaving metrics to {metrics_csv}...")
-        
-        with open(metrics_csv, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(all_results)
-        
-        logger.info(f"✓ Wrote {len(all_results)} rows")
-        logger.info(f"{'='*60}")
-        
-        # Print summary statistics
-        logger.info("\nMetrics Summary:")
-        for condition in conditions:
-            cond_results = [r for r in all_results if r['condition'] == condition]
-            if cond_results:
-                logger.info(f"\n{condition} (n={len(cond_results)}):")
-                metric_names = [k for k in fieldnames if k not in ['condition', 'img_id']]
-                for metric in metric_names:
-                    values = [r[metric] for r in cond_results if metric in r]
-                    if values:
-                        avg = sum(values) / len(values)
-                        logger.info(f"  {metric:20s}: {avg:.4f}")
-    else:
-        logger.error("No metrics computed")
-        return 1
+    logger.info("Step: Metrics computation")
+    logger.info(f"{'='*60}")
+    logger.info("✓ Metrics computed and saved during inference")
+    logger.info("✓ Results available in: ablation_study/metrics/results.csv")
     
     # Final report
     logger.info("\n" + "=" * 60)
@@ -213,19 +191,25 @@ Examples:
     logger.info("=" * 60)
     logger.info("\nOutput Structure:")
     logger.info("  ablation_study/")
-    logger.info("    ├── images/              # 20 sampled COCO images")
-    logger.info("    ├── prompts.csv          # Image metadata and captions")
-    logger.info("    ├── outputs/")
-    logger.info("    │   ├── FULL/            # Full pipeline outputs")
-    logger.info("    │   ├── ABL-NO2X/        # 2x controls disabled")
-    logger.info("    │   ├── ABL-NO4X/        # 4x controls disabled")
-    logger.info("    │   ├── ABL-NONE/        # Both controls disabled")
-    logger.info("    │   └── inference_results.json")
-    logger.info("    └── metrics.csv          # Computed metrics")
+    logger.info("    ├── images/                 # 20 sampled COCO images (seed=42)")
+    logger.info("    ├── prompts.csv             # Image metadata and captions")
+    logger.info("    ├── idx_9/                  # Generated images (target_index=9)")
+    logger.info("    ├── idx_12/                 # Generated images (target_index=12)")
+    logger.info("    ├── idx_15/                 # Generated images (target_index=15)")
+    logger.info("    ├── idx_20/                 # Generated images (target_index=20)")
+    logger.info("    │")
+    logger.info("    └── metrics/")
+    logger.info("        └── results.csv         # Per-image metrics table")
+    logger.info("\nResults CSV Columns:")
+    logger.info("  - condition: idx_9, idx_12, idx_15, idx_20")
+    logger.info("  - img_id, prompt, output_path")
+    logger.info("  - total_inference_time, peak_vram_gb")
+    logger.info("  - clip_score (higher=better), ssim, lpips (vs idx_9 baseline)")
+    logger.info("  - error_flag, error_message")
     logger.info("\nNext steps:")
-    logger.info("  1. Review metrics.csv for quality degradation")
-    logger.info("  2. Analyze outputs in ablation_study/outputs/")
-    logger.info("  3. Compare performance/speed tradeoffs")
+    logger.info("  1. Open ablation_study/metrics/results.csv to review results")
+    logger.info("  2. Compare CLIP scores across indices to find best prompt adherence")
+    logger.info("  3. Analyze visual outputs in ablation_study/{idx_9,idx_12,idx_15,idx_20}/")
     logger.info("=" * 60)
     
     return 0

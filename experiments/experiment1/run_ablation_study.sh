@@ -17,38 +17,44 @@ set -e  # Exit on any error
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
+# Load .env file from repository root if it exists
+ENV_FILE="../../.env"
+if [ -f "$ENV_FILE" ]; then
+    echo "Loading environment from $ENV_FILE..."
+    export $(grep -v '^#' "$ENV_FILE" | xargs)
+else
+    echo "[WARNING] .env file not found at $ENV_FILE"
+    echo "[INFO] Attempting to activate torch environment..."
+    eval "$(conda shell.bash hook)"
+    conda activate torch
+fi
+
 echo "=========================================="
 echo "FramePack Ablation Study"
 echo "=========================================="
-echo "Multi-scale Controls in One-Frame Inference"
+echo "Target Frame Index Optimization"
 echo ""
-echo "Dataset: COCO val2017 (20 sampled images)"
-echo "Conditions: FULL, ABL-NO2X, ABL-NO4X, ABL-NONE"
-echo "Quality Metrics: LPIPS, SSIM, CLIP Score"
-echo "Speed Metrics: diffusion_time, peak_vram_gb, total_inference_time"
+echo "Dataset: InstructPix2Pix (20 paired image-instruction samples)"
+echo "Conditions: idx_9, idx_12, idx_15, idx_20"
+echo "Quality Metrics: CLIP Score, SSIM, LPIPS"
+echo "Performance: total_inference_time, peak_vram_gb"
 echo "=========================================="
 echo ""
 
-# Parse arguments
+# Parse arguments (legacy - kept for compatibility)
 SKIP_DOWNLOAD=false
 SKIP_SAMPLING=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --skip-download)
-            SKIP_DOWNLOAD=true
-            echo "[INFO] Skipping COCO download"
-            shift
-            ;;
-        --skip-sampling)
-            SKIP_SAMPLING=true
-            echo "[INFO] Skipping image sampling"
+        --skip-download|--skip-sampling)
+            echo "[INFO] Argument ignored (using HF InstructPix2Pix dataset)"
             shift
             ;;
         *)
             echo "Unknown option: $1"
             echo ""
-            echo "Usage: $0 [--skip-download] [--skip-sampling]"
+            echo "Usage: $0"
             exit 1
             ;;
     esac
@@ -84,14 +90,6 @@ echo ""
 # Build command
 CMD="python run_ablation_study.py"
 
-if [ "$SKIP_DOWNLOAD" = true ]; then
-    CMD="$CMD --skip-download"
-fi
-
-if [ "$SKIP_SAMPLING" = true ]; then
-    CMD="$CMD --skip-sampling"
-fi
-
 # Run ablation study
 echo "=========================================="
 echo "Running ablation study..."
@@ -110,9 +108,9 @@ if [ $exit_code -eq 0 ]; then
     echo "=========================================="
     echo ""
     echo "Results:"
-    echo "  Metrics: ablation_study/metrics.csv"
-    echo "  Outputs: ablation_study/outputs/"
-    echo "  Images: ablation_study/images/"
+    echo "  Metrics: ablation_study/metrics/results.csv"
+    echo "  Generated: ablation_study/{idx_9,idx_12,idx_15,idx_20}/"
+    echo "  Dataset: ablation_study/images/ (20 InstructPix2Pix samples)"
     echo ""
 else
     echo ""

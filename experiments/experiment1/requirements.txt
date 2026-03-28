@@ -5,18 +5,21 @@
 torch>=2.0.0
 torchvision>=0.15.0
 
-# Image processing
+# Data
+datasets>=2.10.0  # HuggingFace datasets for InstructPix2Pix
 Pillow>=9.0.0
 numpy>=1.20.0
-
-# Data handling
 pandas>=2.0.0
 
 # Metrics (as specified in protocol)
 lpips>=0.1.4
 scikit-image>=0.20.0
-# CLIP for prompt adherence scoring
-# Install: pip install git+https://github.com/openai/CLIP.git
+
+# CLIP for prompt adherence scoring (install via git)
+# pip install git+https://github.com/openai/CLIP.git
+
+# Utilities
+python-dotenv>=0.19.0
 
 # Utilities
 tqdm>=4.60.0
