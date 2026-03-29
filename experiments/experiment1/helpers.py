@@ -26,21 +26,22 @@ import numpy as np
 from PIL import Image
 from skimage.metrics import structural_similarity
 
+# Setup logging
+logger = logging.getLogger(__name__)
+
 # Import dataset loader
 from datasets import load_dataset
 
-# Import CLIP for prompt adherence scoring
+# Import CLIP scorer (loads from local file, no SSL issues)
 try:
-    import clip
+    from clip_scorer import CLIPScorer
     CLIP_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     CLIP_AVAILABLE = False
+    logger.warning(f"CLIP not available: {e}")
 
-logger = logging.getLogger(__name__)
-
-# Global model cache
-_clip_model = None
-_clip_preprocess = None
+# Global scorer cache (lazy loaded)
+_clip_scorer = None
 
 
 # ============================================================================
@@ -197,43 +198,38 @@ def ssim_metric(img1_path: str, img2_path: str) -> Optional[float]:
         return None
 
 
-def clip_score_metric(image_path: str, prompt: str) -> Optional[float]:
+def clip_score_metric(image_path: str, prompt: str, device: str = "cuda:0") -> Optional[float]:
     """
     CLIP Score: cosine similarity between image and text embeddings.
     Higher = better alignment with prompt (typically 0 to 1)
+    
+    Args:
+        image_path: Path to generated image
+        prompt: Text prompt used for generation
+        device: Device to run CLIP on (default: cuda:0)
     """
     if not CLIP_AVAILABLE:
+        logger.warning("CLIP not available - skipping CLIP score")
         return None
     
     try:
-        global _clip_model, _clip_preprocess
+        global _clip_scorer
         
-        # Load CLIP model on first call (cached)
-        if _clip_model is None:
-            logger.info("Loading CLIP model (this may take a moment)...")
-            _clip_model, _clip_preprocess = clip.load("ViT-B/32", device="cuda")
-            logger.info("✓ CLIP model loaded")
+        # Load CLIP scorer on first call (cached)
+        if _clip_scorer is None:
+            logger.debug(f"Loading CLIP scorer on device {device}...")
+            _clip_scorer = CLIPScorer(device=device)
+            logger.info(f"✓ CLIP scorer ready")
         
-        # Encode image
+        # Load image
         img_pil = Image.open(image_path).convert('RGB')
-        img_tensor = _clip_preprocess(img_pil).unsqueeze(0).to("cuda")
         
-        # Encode text
-        text_tokens = clip.tokenize([prompt]).to("cuda")
-        
-        with torch.no_grad():
-            img_features = _clip_model.encode_image(img_tensor)
-            text_features = _clip_model.encode_text(text_tokens)
-            
-            # Normalize and compute similarity
-            img_features = img_features / img_features.norm(dim=-1, keepdim=True)
-            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-            
-            score = (img_features @ text_features.T).item()
+        # Compute score
+        score = _clip_scorer.score(img_pil, prompt)
         
         return float(score)
     except Exception as e:
-        logger.error(f"CLIP Score computation failed: {e}")
+        logger.error(f"CLIP Score computation failed: {type(e).__name__}: {e}", exc_info=True)
         return None
 
 
@@ -304,24 +300,29 @@ def run_cli_inference(
     output_path: str,
     model_paths: Dict[str, str],
     target_index: int = 9,
-    seed: int = 42,
-    infer_steps: int = 25,
-    guidance_scale: float = 10.0,
 ) -> Dict:
     """
     Run inference via subprocess call to src/cli_inference.py
     
+    Uses CLI defaults for: seed=42, infer_steps=25, guidance_scale=10.0, 
+                          dtype=bfloat16, attn_mode=sdpa, output_format=png
+    
     Returns dict with:
     - success: bool
-    - total_inference_time: float (seconds)
-    - peak_vram_gb: float
+    - total_inference_time: float (seconds) or None
+    - peak_vram_gb: float or None
     - output_path: str
     - error: str (if failed)
     """
     
     # Build CLI command
+    # Only pass arguments that differ from defaults (see cli_inference.py line 46-117)
+    # Defaults we skip: seed=42, infer_steps=25, guidance_scale=10.0, 
+    #                   dtype=bfloat16, attn_mode=sdpa, output_format=png
+    #
+    # IMPORTANT: Explicitly set height/width to avoid auto-detection rounding issues
     cmd = [
-        os.environ.get("PYTHON_BIN", sys.executable),  # Use PYTHON_BIN from env if available (torch env)
+        os.environ.get("PYTHON_BIN", sys.executable),
         os.path.join(os.path.dirname(__file__), '..', '..', 'src', 'cli_inference.py'),
         '--image_path', image_path,
         '--prompt', prompt,
@@ -331,15 +332,11 @@ def run_cli_inference(
         '--text_encoder1', model_paths['text_encoder1'],
         '--text_encoder2', model_paths['text_encoder2'],
         '--image_encoder', model_paths['image_encoder'],
-        '--seed', str(seed),
-        '--infer_steps', str(infer_steps),
-        '--guidance_scale', str(guidance_scale),
-        '--height', '640',
-        '--width', '512',
-        '--dtype', 'bfloat16',
-        '--attn_mode', 'sdpa',
-        '--target_index', str(target_index),
-        '--device', 'cuda:1'
+        '--target_index', str(target_index),  # Only param that varies per condition
+        '--height', '512',  # Match typical InstructPix2Pix input size
+        '--width', '512',   # Match typical InstructPix2Pix input size
+        '--device', 'cuda:1',
+        '--verbose',
     ]
     
     try:
@@ -493,9 +490,6 @@ def run_all_inference(
                     str(output_image_path),
                     model_paths,
                     target_index=condition_info['target_index'],
-                    seed=42,
-                    infer_steps=25,
-                    guidance_scale=10.0,
                 )
                 
                 if not inference_result['success']:
@@ -511,20 +505,28 @@ def run_all_inference(
                 if condition_name != 'idx_9':
                     baseline_path = output_dir / "idx_9" / f"{img_id}_generated.png"
                     if baseline_path.exists():
-                        logger.info(f"    Computing metrics vs idx_9...")
+                        logger.info(f"    Computing LPIPS/SSIM metrics vs idx_9...")
                         
                         lpips = lpips_metric(str(baseline_path), str(output_image_path))
                         if lpips is not None:
                             result_row['lpips'] = round(lpips, 5)
+                        else:
+                            logger.warning(f"      LPIPS metric failed for {img_id}")
                         
                         ssim = ssim_metric(str(baseline_path), str(output_image_path))
                         if ssim is not None:
                             result_row['ssim'] = round(ssim, 5)
+                        else:
+                            logger.warning(f"      SSIM metric failed for {img_id}")
                 
-                # CLIP Score (per-image prompt adherence)
-                clip_score = clip_score_metric(str(output_image_path), prompt)
+                # CLIP Score (per-image prompt adherence) - compute for ALL conditions
+                logger.info(f"    Computing CLIP score...")
+                clip_score = clip_score_metric(str(output_image_path), prompt, device="cuda:0")
                 if clip_score is not None:
                     result_row['clip_score'] = round(clip_score, 5)
+                    logger.info(f"      ✓ CLIP score: {clip_score:.4f}")
+                else:
+                    logger.warning(f"      ✗ CLIP score failed (may not be installed)")
                 
                 result_row['error_flag'] = False
                 success_count += 1
@@ -548,3 +550,96 @@ def run_all_inference(
     logger.info(f"{'='*60}")
     
     return True
+
+
+# ============================================================================
+# SUMMARY METRICS COMPUTATION
+# ============================================================================
+
+def compute_summary_metrics(results_csv: str, output_dir: Path) -> bool:
+    """
+    Compute and save summary statistics for each target_index.
+    Generates a summary CSV for poster/report.
+    """
+    import pandas as pd
+    
+    try:
+        # Load results
+        df = pd.read_csv(results_csv)
+        
+        if df.empty:
+            logger.warning("No results to summarize")
+            return False
+        
+        # Group by condition (target_index) and compute statistics
+        summary_data = []
+        
+        for condition in df['condition'].unique():
+            condition_df = df[df['condition'] == condition]
+            
+            n_samples = len(condition_df)
+            n_success = len(condition_df[condition_df['error_flag'] == False])
+            n_failed = len(condition_df[condition_df['error_flag'] == True])
+            
+            # Metrics statistics (only for non-error rows)
+            success_df = condition_df[condition_df['error_flag'] == False]
+            
+            # CLIP Score (available for all)
+            clip_scores = pd.to_numeric(success_df['clip_score'], errors='coerce').dropna()
+            clip_mean = clip_scores.mean() if len(clip_scores) > 0 else None
+            clip_std = clip_scores.std() if len(clip_scores) > 1 else None
+            
+            # LPIPS (only for non-idx_9)
+            lpips_scores = pd.to_numeric(success_df['lpips'], errors='coerce').dropna()
+            lpips_mean = lpips_scores.mean() if len(lpips_scores) > 0 else None
+            lpips_std = lpips_scores.std() if len(lpips_scores) > 1 else None
+            
+            # SSIM (only for non-idx_9)
+            ssim_scores = pd.to_numeric(success_df['ssim'], errors='coerce').dropna()
+            ssim_mean = ssim_scores.mean() if len(ssim_scores) > 0 else None
+            ssim_std = ssim_scores.std() if len(ssim_scores) > 1 else None
+            
+            # Timing and memory
+            inference_times = pd.to_numeric(success_df['total_inference_time'], errors='coerce').dropna()
+            infer_time_mean = inference_times.mean() if len(inference_times) > 0 else None
+            infer_time_std = inference_times.std() if len(inference_times) > 1 else None
+            
+            peak_vrams = pd.to_numeric(success_df['peak_vram_gb'], errors='coerce').dropna()
+            peak_vram_mean = peak_vrams.mean() if len(peak_vrams) > 0 else None
+            peak_vram_max = peak_vrams.max() if len(peak_vrams) > 0 else None
+            
+            summary_data.append({
+                'Condition': condition,
+                'Samples': n_samples,
+                'Success': n_success,
+                'Failed': n_failed,
+                'CLIP_Mean': round(clip_mean, 4) if clip_mean else None,
+                'CLIP_Std': round(clip_std, 4) if clip_std else None,
+                'LPIPS_Mean': round(lpips_mean, 4) if lpips_mean else None,
+                'LPIPS_Std': round(lpips_std, 4) if lpips_std else None,
+                'SSIM_Mean': round(ssim_mean, 4) if ssim_mean else None,
+                'SSIM_Std': round(ssim_std, 4) if ssim_std else None,
+                'InferTime_Sec_Mean': round(infer_time_mean, 2) if infer_time_mean else None,
+                'InferTime_Sec_Std': round(infer_time_std, 2) if infer_time_std else None,
+                'PeakVRAM_GB_Mean': round(peak_vram_mean, 2) if peak_vram_mean else None,
+                'PeakVRAM_GB_Max': round(peak_vram_max, 2) if peak_vram_max else None,
+            })
+        
+        # Save summary
+        summary_df = pd.DataFrame(summary_data)
+        summary_csv = output_dir / "summary_metrics.csv"
+        summary_df.to_csv(summary_csv, index=False)
+        
+        logger.info(f"\n{'='*60}")
+        logger.info("SUMMARY METRICS (for poster/report)")
+        logger.info(f"{'='*60}")
+        logger.info(f"\n{summary_df.to_string(index=False)}")
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Summary saved to: {summary_csv}")
+        logger.info(f"{'='*60}\n")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to compute summary metrics: {e}")
+        return False

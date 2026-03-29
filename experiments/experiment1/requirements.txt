@@ -15,11 +15,9 @@ pandas>=2.0.0
 lpips>=0.1.4
 scikit-image>=0.20.0
 
-# CLIP for prompt adherence scoring (install via git)
-# pip install git+https://github.com/openai/CLIP.git
+# CLIP must be installed separately (optional - only if not already installed)
+# See README.md for setup instructions
 
 # Utilities
 python-dotenv>=0.19.0
-
-# Utilities
 tqdm>=4.60.0

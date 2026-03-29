@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from helpers import (
     load_instructpix2pix,
     run_all_inference,
+    compute_summary_metrics,
     load_prompts_csv,
 )
 
@@ -185,6 +186,12 @@ Examples:
     logger.info("✓ Metrics computed and saved during inference")
     logger.info("✓ Results available in: ablation_study/metrics/results.csv")
     
+    # Step 4: Generate summary metrics for poster/report
+    logger.info("\nGenerating summary metrics for poster/report...")
+    results_csv = Path("ablation_study") / "metrics" / "results.csv"
+    if not compute_summary_metrics(str(results_csv), Path("ablation_study")):
+        logger.error("Warning: Summary metrics generation failed (results still valid)")
+    
     # Final report
     logger.info("\n" + "=" * 60)
     logger.info("✓ ABLATION STUDY COMPLETE")
@@ -197,15 +204,22 @@ Examples:
     logger.info("    ├── idx_12/                 # Generated images (target_index=12)")
     logger.info("    ├── idx_15/                 # Generated images (target_index=15)")
     logger.info("    ├── idx_20/                 # Generated images (target_index=20)")
-    logger.info("    │")
-    logger.info("    └── metrics/")
-    logger.info("        └── results.csv         # Per-image metrics table")
-    logger.info("\nResults CSV Columns:")
+    logger.info("    ├── metrics/")
+    logger.info("    │   ├── results.csv         # Per-image metrics table")
+    logger.info("    │   └── summary_metrics.csv # Statistics per condition (for poster)")
+    logger.info("    └── ")
+    logger.info("\nResults CSV Columns (results.csv):")
     logger.info("  - condition: idx_9, idx_12, idx_15, idx_20")
     logger.info("  - img_id, prompt, output_path")
     logger.info("  - total_inference_time, peak_vram_gb")
     logger.info("  - clip_score (higher=better), ssim, lpips (vs idx_9 baseline)")
     logger.info("  - error_flag, error_message")
+    logger.info("\nSummary Metrics (summary_metrics.csv - for poster):")
+    logger.info("  - CLIP_Mean/Std (per condition)")
+    logger.info("  - SSIM_Mean/Std (per condition vs idx_9 baseline)")
+    logger.info("  - LPIPS_Mean/Std (per condition vs idx_9 baseline)")
+    logger.info("  - InferTime_Sec_Mean/Std (per condition)")
+    logger.info("  - PeakVRAM_GB_Mean/Max (per condition)")
     logger.info("\nNext steps:")
     logger.info("  1. Open ablation_study/metrics/results.csv to review results")
     logger.info("  2. Compare CLIP scores across indices to find best prompt adherence")

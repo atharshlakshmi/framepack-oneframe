@@ -30,7 +30,7 @@ $PYTHON_BIN "$SCRIPT_DIR/src/cli_inference.py" \
   --prompt "the cat is dancing at the beach" \
   --output_path "$OUTPUT_PATH" \
   --save_params "$CSV_PATH" \
-  --target_index 30 \
+  --target_index 9 \
   --infer_steps 25 \
   --seed 1234 \
   --output_format png \
