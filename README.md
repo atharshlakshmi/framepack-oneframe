@@ -17,7 +17,6 @@ Research adaptation of FramePack for single-frame image inference. This project 
   - [Image Editing Workflow](#image-editing-workflow)
   - [CLI](#cli)
   - [Common Options](#common-options)
-  - [Quality Tuning Guide](#quality-tuning-guide)
 - [Examples](#examples)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
@@ -142,13 +141,12 @@ parent_folder/                           # Your workspace
     │   └── output2.png
     │
     ├── experiments/                   # Research experiments & ablations
-    │   ├── README.md                  # **See here for experiment documentation**
+    │   ├── README.md                  # See here for experiment documentation
     │   ├── experiment1/               # Individual experiment folders
     │   └── ...
     │
     └── documentation/                 # Detailed documentation
-        ├── technical_summary.md       # Comprehensive implementation details
-        └── simplified_summary.md      # FramePack adaptation guide for non-technical readers
+        └── technical_summary.md       # Comprehensive implementation details
 ```
 
 ## Source Code Overview
@@ -203,7 +201,7 @@ python src/cli_inference.py \
   --text_encoder1 /path/to/models/llava_llama3_fp16.safetensors \
   --text_encoder2 /path/to/models/clip_l.safetensors \
   --image_encoder /path/to/models/model.safetensors \
-  --device cuda:0
+  --device cuda
 ```
 
 **Or use the example script:**
@@ -224,62 +222,15 @@ bash run.sh
 | `--prompt` | *required* | Text edit description |
 | `--negative_prompt` | "" | Things to avoid |
 | `--infer_steps` | 25 | Sampling steps (more = quality) |
-| `--guidance_scale` | 10.0 | Prompt strength (7-15) |
+| `--guidance_scale` | 1.0 | Prompt strength (7-15) |
 | `--height` / `--width` | 640 / 512 | Output size (÷64) |
 | `--seed` | 42 | Random seed |
 | `--dtype` | bfloat16 | fp16/bfloat16/fp32 |
 | `--vae_tiling` | False | Lower VRAM mode |
-| `--device` | cuda:0 | GPU device to use |
-| `--attn_mode` | sdpa | Attention implementation (sdpa, xformers, default) |
+| `--device` | cuda | GPU device to use (cuda/cpu, specify cuda:0, cuda:1, etc) |
+| `--attn_mode` | sdpa | Attention implementation (sdpa, xformers, flash, sageattn) |
 | `--verbose` | False | Print detailed debug info |
 
-### Quality Tuning Guide
-
-**Trade-off Matrix:** Adjust these for your quality vs. speed needs:
-
-| Goal | Guidance Scale | Infer Steps | Negative Prompt | Quality |
-|------|---|---|---|---|
-| **Fast** | 7.0 | 20 | None | Good |
-| **Balanced** | 10.0 | 25 | "blurry, low quality" | Excellent |
-| **High Quality** | 12.0 | 35 | "blurry, artifacts, worst quality" | Best |
-| **Ultra Quality** | 14.0 | 50 | "blurry, artifacts, worst quality, oversaturated" | Premium |
-
-**Parameter explanations:**
-- **guidance_scale** – Higher = follows prompt more strictly (7-15 recommended, diminishing returns >13)
-- **infer_steps** – More steps = better quality but slower (20-50 sweet spot)
-- **negative_prompt** – Tell model what to avoid; more detailed = better rejection
-
-**Resolution quality settings:**
-```bash
-# Fast generation (mobile/testing)
---height 512 --width 384 --infer_steps 20
-
-# Standard quality
---height 640 --width 512 --infer_steps 25
-
-# High quality
---height 768 --width 576 --infer_steps 35 --guidance_scale 11.0
-
-# Ultra high quality (slow)
---height 960 --width 720 --infer_steps 50 --guidance_scale 12.0
-```
-
-## Examples
-
-### High Quality
-```bash
---infer_steps 50 --guidance_scale 12.0 --negative_prompt "blurry, low quality"
-```
-
-### Low VRAM (24GB GPU)
-```bash
---vae_tiling --vae_chunk_size 32 --dtype fp16 --height 512 --width 384
-```
-
-### Custom Resolution
-```bash
---height 768 --width 512
-```
 
 **Memory Requirements:**
 - BF16: ~41GB (640x512)

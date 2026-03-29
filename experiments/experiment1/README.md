@@ -28,31 +28,28 @@ This directory contains an ablation study to optimize the target frame index for
 pip install -r requirements.txt
 ```
 
-### 2. Install CLIP (One-Time)
+### 2. Setup CLIP (One-Time Complete Install)
 
-**Option A: If you already have CLIP installed**
-
-Skip this step — CLIP is already available.
-
-**Option B: If CLIP is not installed**
-
-Install from git (may be slow on first run due to compilation):
-```bash
-pip install git+https://github.com/openai/CLIP.git
-```
-
-### 3. Setup CLIP Weights (One-Time)
-
-Download CLIP weights to bypass SSL certificate issues:
+Run the unified setup script to install CLIP + download weights:
 
 ```bash
-# This downloads ViT-B-32.pt using wget (bypasses SSL)
-python fix_clip_ssl.py
+python clip_ssl.py
 ```
 
-This creates `~/.cache/clip/ViT-B-32.pt` (354 MB). After this, CLIP loads from local cache with no network access.
+This script:
+- Installs CLIP from GitHub (if not already installed)
+- Downloads ViT-B-32 weights to `~/.cache/clip/ViT-B-32.pt` (354 MB)
+- Verifies SHA-256 checksums
+- Bypasses SSL certificate errors using wget
 
-### 4. Run the Study
+**Options**:
+```bash
+python clip_ssl.py --model ViT-B/16      # Use better model (larger, slower)
+python clip_ssl.py --verify-only         # Check if setup is complete
+python clip_ssl.py --clip-only           # Just install CLIP, skip weights
+```
+
+### 3. Run the Study
 
 ```bash
 # Full run (loads InstructPix2Pix from HuggingFace)
@@ -177,14 +174,14 @@ The study uses:
 2. **run_ablation_study.py**: Main orchestrator (loops through 4 indices, generates summary metrics)
 3. **run_cli_inference()**: Subprocess wrapper that passes `--target_index` parameter
 4. **clip_scorer.py**: Loads CLIP from local cache, computes prompt-image alignment
-5. **fix_clip_ssl.py**: Downloads CLIP weights via wget (one-time setup)
+5. **clip_ssl.py**: Complete CLIP setup (installs CLIP + downloads weights via wget)
 
 ### CLIP Scoring Details
 
 **Problem**: CLIP's default downloader fails on networks with proxy/firewall (SSL certificate issues).
 
 **Solution**: 
-- `fix_clip_ssl.py` downloads weights via `wget --no-check-certificate` (bypasses Python's SSL stack)
+- `clip_ssl.py` installs CLIP and downloads weights via `wget --no-check-certificate` (bypasses Python's SSL stack)
 - `clip_scorer.py` loads from `~/.cache/clip/ViT-B-32.pt` (local file path)
 - CLIP accepts file paths directly — download code is never executed
 
@@ -220,12 +217,15 @@ InstructPix2Pix (HuggingFace: timbrooks/instructpix2pix-clip-filtered)
 
 **Error**: `SSLError: [SSL: CERTIFICATE_VERIFY_FAILED]` when importing CLIP
 
-**Fix**: Run setup once:
+**Fix**: Run complete setup:
 ```bash
-python fix_clip_ssl.py
+python clip_ssl.py
 ```
 
-This downloads weights via `wget --no-check-certificate` → `~/.cache/clip/ViT-B-32.pt`.
+This script:
+- Installs CLIP from GitHub (if needed)
+- Downloads weights via `wget --no-check-certificate` → `~/.cache/clip/ViT-B-32.pt`
+- Verifies checksums
 
 After this, `clip_scorer.py` loads from local cache (no SSL issues, no network access needed).
 

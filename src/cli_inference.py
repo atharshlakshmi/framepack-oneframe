@@ -78,7 +78,7 @@ def main():
                         help="Random seed for reproducibility")
     parser.add_argument("--infer_steps", type=int, default=25,
                         help="Number of inference steps")
-    parser.add_argument("--guidance_scale", type=float, default=10.0,
+    parser.add_argument("--guidance_scale", type=float, default=1.0,
                         help="Classifier-free guidance scale")
     parser.add_argument("--target_index", type=int, default=9,
                         help="Target frame index in latent window")

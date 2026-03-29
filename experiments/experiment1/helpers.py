@@ -335,7 +335,7 @@ def run_cli_inference(
         '--target_index', str(target_index),  # Only param that varies per condition
         '--height', '512',  # Match typical InstructPix2Pix input size
         '--width', '512',   # Match typical InstructPix2Pix input size
-        '--device', 'cuda:1',
+        '--device', 'cuda:0',
         '--verbose',
     ]
     
