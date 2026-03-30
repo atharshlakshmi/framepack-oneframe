@@ -120,10 +120,27 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Full run
+  # Default: 10 samples with seed=42
   python run_ablation_study.py
+  
+  # Different sample set (same count, different seed)
+  python run_ablation_study.py --seed 123
+  
+  # Different sample count and seed
+  python run_ablation_study.py --num-samples 5 --seed 456
         """
     )
+    
+    parser.add_argument(
+        '--num-samples', type=int, default=10,
+        help='Number of samples to use from InstructPix2Pix (default: 10)'
+    )
+    parser.add_argument(
+        '--seed', type=int, default=42,
+        help='Random seed for sampling (default: 42, change to get different samples)'
+    )
+    
+    args = parser.parse_args()
     
     # Setup logging
     logging.basicConfig(
@@ -149,9 +166,10 @@ Examples:
         return 1
     
     logger.info("✓ All files present\n")
+    logger.info(f"Configured for {args.num_samples} samples with seed={args.seed}\n")
     
     # Step 1: Load InstructPix2Pix Dataset
-    if not run_step("Load InstructPix2Pix dataset", load_instructpix2pix):
+    if not run_step("Load InstructPix2Pix dataset", load_instructpix2pix, args.num_samples, args.seed):
         return 1
     
     # Step 2: Run inference (requires models)

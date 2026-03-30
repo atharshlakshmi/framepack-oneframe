@@ -13,6 +13,13 @@
 
 set -e  # Exit on any error
 
+# ============================================================================
+# CONFIGURATION - Edit these to change sampling behavior
+# ============================================================================
+NUM_SAMPLES=10          # Number of images to sample (default: 10)
+SEED=1234                 # Random seed for sampling (change this for different sets)
+# ============================================================================
+
 # Get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
@@ -34,10 +41,11 @@ echo "FramePack Ablation Study"
 echo "=========================================="
 echo "Target Frame Index Optimization"
 echo ""
-echo "Dataset: InstructPix2Pix (20 paired image-instruction samples)"
+echo "Dataset: InstructPix2Pix ($NUM_SAMPLES paired image-instruction samples)"
 echo "Conditions: idx_9, idx_12, idx_15, idx_20"
 echo "Quality Metrics: CLIP Score, SSIM, LPIPS"
 echo "Performance: total_inference_time, peak_vram_gb"
+echo "Sampling: $NUM_SAMPLES samples with seed=$SEED"
 echo "=========================================="
 echo ""
 
@@ -87,8 +95,8 @@ pip install -r requirements.txt
 echo "✓ Dependencies installed"
 echo ""
 
-# Build command
-CMD="python run_ablation_study.py"
+# Build command with sampling parameters
+CMD="python run_ablation_study.py --num-samples $NUM_SAMPLES --seed $SEED"
 
 # Run ablation study
 echo "=========================================="

@@ -25,8 +25,14 @@ class LatentIndexManager:
     one-frame generation mode, including control images, multi-scale controls,
     and target frame positioning.
     
+    RoPE Position Indices:
+    - control_indices[0] (index 0): START frame position — high-quality anchor reference image
+    - control_indices[1] (index 10): POST-frame slot — zero placeholder for historical context,
+      only added if "no_post" not in flags
+    - 2x/4x indices: Automatically adjusted based on "no_post" flag
+    
     Example:
-        manager = LatentIndexManager(target_index=9, control_indices=[1, 10])
+        manager = LatentIndexManager(target_index=9, control_indices=[0, 10])
         indices = manager.compute_indices(device="cuda")
         packed_latents = manager.pack_control_latents(control_list, masks)
     """
@@ -44,12 +50,13 @@ class LatentIndexManager:
         Args:
             latent_window_size: FramePack internal frame buffer size (default 9)
             target_index: Frame index to generate (default 9, at end of window)
-            control_indices: Indices for control/reference frames (default [1, 10])
+            control_indices: Indices for control/reference frames.
+                Default [0, 10]: index 0 for start frame, 10 for post-frame slot
             flags: Set of flags like "no_2x", "no_4x", "no_post"
         """
         self.latent_window_size = latent_window_size
         self.target_index = target_index
-        self.control_indices = control_indices if control_indices is not None else [1, 1 + latent_window_size]
+        self.control_indices = control_indices if control_indices is not None else [0, 1 + latent_window_size]
         self.flags = flags if flags is not None else set()
         
         # Validate indices
@@ -85,8 +92,10 @@ class LatentIndexManager:
             clean_latent_indices[:, i] = idx
         
         # 2x upsampling control indices
+        # Adjust index_start based on whether there is a post-frame slot
+        post_slot_offset = 1 if "no_post" not in self.flags else 0
         if "no_2x" not in self.flags:
-            index_start = 1 + self.latent_window_size + 1
+            index_start = 1 + self.latent_window_size + post_slot_offset
             clean_latent_2x_indices = torch.arange(
                 index_start, index_start + 2,
                 dtype=torch.int64, device=device
@@ -96,7 +105,7 @@ class LatentIndexManager:
         
         # 4x upsampling control indices
         if "no_4x" not in self.flags:
-            index_start = 1 + self.latent_window_size + 1 + 2
+            index_start = 1 + self.latent_window_size + post_slot_offset + 2
             clean_latent_4x_indices = torch.arange(
                 index_start, index_start + 16,
                 dtype=torch.int64, device=device
@@ -135,20 +144,20 @@ class LatentIndexManager:
             logger.info("No control images provided. Using zero latents.")
             control_list = [torch.zeros(1, 16, 1, height // 8, width // 8, dtype=torch.float32)]
         
-        # Add clean latent post if needed
+        # Apply masks before appending the post-frame
+        if masks is not None:
+            for i, mask in enumerate(masks):
+                if mask is not None and i < len(control_list):
+                    control_list[i] = control_list[i] * mask
+                    logger.info(f"Applied mask to control latent {i}")
+        
+        # Add clean latent post if needed (after masks are applied)
         if "no_post" not in self.flags:
             control_list.append(torch.zeros((1, 16, 1, height // 8, width // 8), dtype=torch.float32))
             logger.info("Added zero latents as clean latents post")
         
         # Concatenate control latents
         clean_latents = torch.cat(control_list, dim=2)  # [1, 16, N_ctrl, H/8, W/8]
-        
-        # Apply masks if provided
-        if masks is not None:
-            for i, mask in enumerate(masks):
-                if mask is not None and i < clean_latents.shape[2]:
-                    clean_latents[:, :, i:i+1, :, :] = clean_latents[:, :, i:i+1, :, :] * mask
-                    logger.info(f"Applied mask to control latent {i}")
         
         logger.info(f"Packed control latents shape: {clean_latents.shape}")
         return clean_latents

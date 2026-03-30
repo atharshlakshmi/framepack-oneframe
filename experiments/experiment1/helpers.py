@@ -48,7 +48,7 @@ _clip_scorer = None
 # INSTRUCTPIX2PIX DATASET LOADING
 # ============================================================================
 
-def load_instructpix2pix(num_samples: int = 20, seed: int = 42) -> Tuple[Path, Path]:
+def load_instructpix2pix(num_samples: int = 10, seed: int = 42) -> Tuple[Path, Path]:
     """
     Load InstructPix2Pix dataset from HuggingFace.
     

@@ -18,7 +18,7 @@ The implementation consists of five Python modules in `src/` that orchestrate a 
 
 ## Key Components
 
-**LatentIndexManager** (`latent_packing.py`): Multi-scale indexing with target frame 9, control frames [1, 10]
+**LatentIndexManager** (`latent_packing.py`): Multi-scale indexing with target frame 9, control frames [0, 10. Handles mask application before post-frame append and adjusts 2x/4x indices based on no_post flag
 
 **TextConditioner** (`conditioning_pipeline.py`): Dual-encoder text processing with caching; max 256 tokens
 
@@ -29,8 +29,8 @@ The implementation consists of five Python modules in `src/` that orchestrate a 
 1. Load models (DiT, VAE, text/image encoders)
 2. Encode text prompt via dual encoders
 3. Encode input image to latent + features
-4. Pack with multi-scale indices (target frame 9, controls [1,10])
-5. Diffusion sampling (25 steps default, UniPC sampler)
+4. Pack with multi-scale indices (target frame 9, controls [0,10])
+5. Diffusion sampling (25 steps default, UniPC sampler with MagCacheWrapper)
 6. Extract target frame and VAE decode to RGB
 
 **Control Features**: Deterministic indexing for reproducibility, multi-reference coherence, optional alpha-channel masking for regions, classifier-free guidance (scale 1-15)
@@ -108,10 +108,11 @@ The implementation consists of five Python modules in `src/` that orchestrate a 
 - Configuration flags allow trade-off between consistency and generation speed
 
 **Latent Window Architecture**:
-- References frames at indices [1, 10] provide temporal coherence constraints
+- References frames at indices [0, 10] provide temporal coherence constraints
 - Target frame at index 9 enables generation aware of both past and future context
 - Zero latents automatically generated if no control images provided
 - Optional post-processing latents ("no_post" flag to disable)
+- Multi-scale controls: 2x and 4x indices adjusted by post_slot_offset based on "no_post" flag
 
 ## Source Code Implementation Details
 
@@ -138,25 +139,28 @@ The implementation consists of five Python modules in `src/` that orchestrate a 
 5. SiglipVision (27-layer, 1152-dim) - Image encoder extracting 577 spatial features from 384×384 inputs
 
 **Optimizations**:
-- Models kept on CPU between inference steps, moved to GPU only when needed (Dynamic Device Management - Fix 5)
-- Safetensors manifest parsing avoids glob ordering bugs (Shard Manifest Loading - Fix 4)
+- Models kept on CPU between inference steps, moved to GPU only when needed (Dynamic Device Management)
+- Safetensors manifest parsing avoids glob ordering bugs (Shard Manifest Loading)
 - Optional FP8 quantization for DiT and text encoders reduces memory by 50-75%
+- VAE tiling support for efficient memory management
 
 #### 2. `src/conditioning_pipeline.py` - Text & Image Conditioning
 
 **Purpose**: Convert text prompts and images to model-ready embeddings and latents.
 
 **Key Functions**:
-- **`resize_image_to_bucket()`**: Aspect-ratio-preserving resize with quality downsampling (INTER_AREA) and upsampling (LANCZOS)
+- **`resize_image_to_bucket()`**: Aspect-ratio-preserving resize with quality downsampling (INTER_AREA) and upsampling (LANCZOS). Resizes to exact (width, height)
 - **`TextConditioner`**: Dual-encoder (LLaMA-3 + CLIP-L), outputs [seq_len, 4096] + [768]. Caches encodings (40× speedup on repeated prompts)
-- **`ImageConditioner`**: VAE latent encoding [1, 16, 1, H/8, W/8] + SiglipVision features [1, 577, 1152]
+- **`ImageConditioner`**: VAE latent encoding [1, 16, 1, H/8, W/8] + SiglipVision features [1, 577, 1152]. Encodes to specified resolution
 - **`NullConditioner`**: Skips redundant encoding when guidance_scale=1.0 (30% speedup)
 
 #### 3. `src/latent_packing.py` - Index Management & Masking
 
 **Purpose**: Manage latent tensor construction for multi-scale generation.
 
-**`LatentIndexManager`**: 9-frame window with target frame 9, control frames [1,10], configurable scales (no_2x, no_4x flags). `compute_indices()` generates multi-scale hierarchy, `pack_control_latents()` concatenates with optional masking.
+**`LatentIndexManager`**: 9-frame window with target frame 9, control frames [0, 10], configurable scales (no_2x, no_4x, no_post flags). 
+- `compute_indices()` generates multi-scale hierarchy with proper index offsets accounting for post_slot_offset
+- `pack_control_latents()` applies masks before appending post-frame, then concatenates
 
 **`ControlMaskHandler`**: Load grayscale/alpha masks, resample to latent space (H/8, W/8), apply element-wise for region editing.
 
@@ -164,7 +168,7 @@ The implementation consists of five Python modules in `src/` that orchestrate a 
 
 **`MagCacheWrapper`** (Optimization): Skip redundant DiT forward passes by tracking output magnitude ratios. Interpolates reference ratios from 50-step calibration, skips recomputation when magnitude scaling matches expected values. Achieves 20-30% speedup.
 
-**`GenerationConfig`**: Dataclass holding input image, prompt, seed, inference_steps (25), guidance_scale (10.0), frame indices (target 9, controls [1,10]).
+**`GenerationConfig`**: Dataclass holding input image, prompt, seed, inference_steps (25), guidance_scale (10.0), frame indices (target 9, controls [0,10]).
 
 **`SingleFrameImageEditor`**: Main orchestrator. Lazy-loads conditioners on first use, preloads smaller models, loads DiT on-demand. Generation workflow: encode text → encode image → pack latents → diffusion sampling (with MagCacheWrapper) → extract frame 9 → VAE decode. Device management: text encoders/VAE on CPU, move to GPU only when needed; DiT stays on GPU.
 
@@ -177,7 +181,7 @@ The implementation consists of five Python modules in `src/` that orchestrate a 
 1. VAE encode image → latent [1, 16, 1, H/8, W/8]
 2. Dual-encode text → [seq_len, 4096] + [768]
 3. SiglipVision encode image → [1, 577, 1152]
-4. Pack latents in 9-frame window (target 9, controls [1,10])
+4. Pack latents in 9-frame window (target 9, controls [0,10])
 5. DiT diffusion (25 steps, MagCacheWrapper optimization)
 6. Extract frame 9 → VAE decode → RGB [1, 3, H, W]
 
@@ -244,15 +248,18 @@ from PIL import Image
 editor = SingleFrameImageEditor(
     model_paths={...},
     device="cuda",
-    dtype="bfloat16"
+    dtype="bfloat16",
+    vae_tiling=True,
+    vae_spatial_tile_sample_min_size=256
 )
 config = GenerationConfig(
     image=Image.open("input.jpg"),
     prompt="edit description",
-    guidance_scale=10.0
+    guidance_scale=10.0,
+    control_indices=[0, 10]                   # Control reference indices
 )
 result = editor.generate(config)
-result.save("output.png")
+result["generated_image"].save("output.png")
 ```
 
 ## Summary

@@ -104,6 +104,10 @@ class MagCacheWrapper:
         return src[indices]
 
     def __call__(self, *args, **kwargs):
+        # Reset at the start of each generation to ensure clean state
+        if self.cnt == 0:
+            self._reset()
+        
         # Get magnitude ratios interpolated to current num_steps
         mag_ratios = self._mag_ratios()
         # Warm-up period: don't skip in first 20% of steps (gradual denoising)
@@ -153,6 +157,9 @@ class MagCacheWrapper:
         return result
 
     def __getattr__(self, name: str):
+        # Guard against infinite recursion during __init__ before self.transformer is set
+        if name == "transformer":
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute 'transformer'")
         # Proxy all attribute access to the wrapped transformer so model.device,
         # model.config etc. continue to work transparently
         return getattr(self.transformer, name)
@@ -171,13 +178,16 @@ class GenerationConfig:
     height: int = 640
     width: int = 512
     target_index: int = 9
-    control_indices: Optional[List[int]] = None
+    control_indices: Optional[List[int]] = None  # RoPE positions: [start_frame, post_frame] (Fix 4)
     one_frame_flags: Optional[Set[str]] = None
     flow_shift: Optional[float] = None
     
     def __post_init__(self):
         if self.control_indices is None:
-            self.control_indices = [1, 10]
+            # Default control indices:
+            # index 0 = start frame position (high-quality anchor)
+            # index 10 = post-frame slot (zero placeholder for history)
+            self.control_indices = [0, 10]
         if self.one_frame_flags is None:
             self.one_frame_flags = {"no_2x", "no_4x"}
 
@@ -227,6 +237,9 @@ class SingleFrameImageEditor:
         """
         self.device = torch.device(device) if isinstance(device, str) else device
         self.dtype = dtype
+        self.vae_tiling = vae_tiling
+        self.vae_spatial_tile_sample_min_size = vae_spatial_tile_sample_min_size
+        self.vae_chunk_size = vae_chunk_size
         
         # Initialize models
         logger.info("Initializing FramePack models...")

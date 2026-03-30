@@ -4,7 +4,7 @@ This directory contains an ablation study to optimize the target frame index for
 
 ## Study Overview
 
-**Dataset**: InstructPix2Pix (20 samples from HuggingFace timbrooks/instructpix2pix-clip-filtered)
+**Dataset**: InstructPix2Pix (10 samples from HuggingFace timbrooks/instructpix2pix-clip-filtered)
 
 **Research Question**: Which target frame index produces the best output quality and prompt adherence?
 
@@ -67,14 +67,14 @@ After running the experiment:
 
 ```
 ablation_study/
-├── images/                            # 20 InstructPix2Pix paired samples (original_image)
+├── images/                            # 10 InstructPix2Pix paired samples (original_image)
 ├── prompts.csv                        # Image metadata + edit instructions (edit_prompt)
 ├── idx_9/                             # Generated images (target_index=9)
 ├── idx_12/                            # Generated images (target_index=12)
 ├── idx_15/                            # Generated images (target_index=15)
 ├── idx_20/                            # Generated images (target_index=20)
 └── metrics/
-    ├── results.csv                    # ★ Per-image metrics (80 rows, 4 indices × 20 images)
+    ├── results.csv                    # ★ Per-image metrics (40 rows, 4 indices × 10 images)
     └── summary_metrics.csv            # ★ Summary statistics per index (for poster/report)
 ```
 
@@ -87,7 +87,7 @@ ablation_study/
 | Column | Description | Example |
 |--------|-------------|----------|
 | condition | Index condition | idx_9, idx_12, idx_15, idx_20 |
-| img_id | Image ID | img_001–img_020 |
+| img_id | Image ID | img_001–img_010 |
 | prompt | Edit instruction from dataset | "make the sky more blue" |
 | output_path | Path to generated image | ablation_study/idx_9/img_001_generated.png |
 | total_inference_time | End-to-end generation (seconds) | 18.5 |
@@ -104,8 +104,8 @@ Automatically generated at end of study. Contains one row per condition with agg
 | Column | Description | Example |
 |--------|-------------|----------|
 | Condition | Index condition | idx_9 |
-| Samples | Total images | 20 |
-| Success | Successful generations | 20 |
+| Samples | Total images | 10 |
+| Success | Successful generations | 10 |
 | Failed | Failed generations | 0 |
 | **CLIP_Mean** | Average prompt adherence | 0.82 |
 | **CLIP_Std** | Standard deviation | 0.03 |
@@ -142,7 +142,7 @@ cd /mnt/hdd2/atharshlakshmi/framepack-oneframe/experiments/experiment1
 bash run_ablation_study.sh
 ```
 
-**Expected runtime**: ~3-4 hours (4 indices × 20 images on RTX A6000)
+**Expected runtime**: ~1.5-2 hours (4 indices × 10 images on RTX A6000)
 
 ## Analyzing Results
 
@@ -191,7 +191,7 @@ The study uses:
 ```
 InstructPix2Pix (HuggingFace: timbrooks/instructpix2pix-clip-filtered)
   → Load dataset with datasets library
-  → Sample 20 pairs with seed=42 (original_image + edit_prompt)
+  → Sample 10 pairs with seed=42 (original_image + edit_prompt)
   → Save to ablation_study/images/ and prompts.csv
   → Run inference for each original_image × 4 indices with edit_prompt
   → Compute metrics immediately:

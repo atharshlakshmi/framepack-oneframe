@@ -222,7 +222,7 @@ bash run.sh
 | `--prompt` | *required* | Text edit description |
 | `--negative_prompt` | "" | Things to avoid |
 | `--infer_steps` | 25 | Sampling steps (more = quality) |
-| `--guidance_scale` | 1.0 | Prompt strength (7-15) |
+| `--guidance_scale` | 10.0 | Prompt strength (7-15) |
 | `--height` / `--width` | 640 / 512 | Output size (÷64) |
 | `--seed` | 42 | Random seed |
 | `--dtype` | bfloat16 | fp16/bfloat16/fp32 |

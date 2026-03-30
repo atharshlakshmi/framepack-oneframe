@@ -43,7 +43,6 @@ def resize_image_to_bucket(
     """
     Resize image to exactly fill bucket_reso (width, height) via scale-then-center-crop.
     Uses cv2.INTER_AREA for downsampling (better quality) and PIL LANCZOS for upsampling.
-    Ported from musubi-tuner's implementation in image_video_dataset.py.
     """
     is_pil_image = isinstance(image, Image.Image)
     if is_pil_image:
@@ -321,9 +320,8 @@ class ImageConditioner:
             ctrl_image = ctrl_image.convert("RGB")
             ctrl_image_np = np.array(ctrl_image)
             
-            # Resize to target resolution
-            bucket_h, bucket_w = simple_bucket_selector(width, height)
-            ctrl_image_np = resize_image_to_bucket(ctrl_image_np, (bucket_w, bucket_h))
+            # Resize to target resolution — must match main image encoding
+            ctrl_image_np = resize_image_to_bucket(ctrl_image_np, (width, height))
             
             # Prepare tensor for VAE
             ctrl_image_tensor = torch.from_numpy(ctrl_image_np).float() / 127.5 - 1.0
