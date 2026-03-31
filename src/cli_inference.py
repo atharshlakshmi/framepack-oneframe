@@ -167,6 +167,7 @@ def main():
         if args.negative_prompt:
             print(f"Negative prompt: {args.negative_prompt}")
         print(f"Resolution: {args.height}x{args.width}")
+        print(f"Target Index: {args.target_index}")
         print(f"Inference steps: {args.infer_steps}")
         print(f"Guidance scale: {args.guidance_scale}")
         print(f"Seed: {args.seed}")
