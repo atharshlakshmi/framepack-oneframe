@@ -1,2 +1,11 @@
-image_filename,prompt,seed
-ice-cream.jpg,"add a scoop of ice cream on the cone",43
+image_filename,prompt
+ice-cream.jpg,"add a scoop of ice cream on the cone"
+pasta.jpg,"add a fork beside the pasta"
+dog.jpg,"make the dog wave one paw"
+cat.jpg,"make the cat yawn"
+red-car.jpg,"make the car blue"
+yellow-flower.jpg,"make the flower pink"
+sunny-street.jpg,"make the street wet and rainy"
+park.jpg,"add clouds to the sky"
+unlit-candle.jpg,"light the candle"
+closed-book.jpg,"open the book"

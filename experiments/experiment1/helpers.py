@@ -333,9 +333,7 @@ def run_cli_inference(
         '--text_encoder2', model_paths['text_encoder2'],
         '--image_encoder', model_paths['image_encoder'],
         '--target_index', str(target_index),  # Only param that varies per condition
-        '--height', '512',  # Match typical InstructPix2Pix input size
-        '--width', '512',   # Match typical InstructPix2Pix input size
-        '--device', 'cuda:0',
+        '--device', 'cuda:1',
         '--verbose',
     ]
     

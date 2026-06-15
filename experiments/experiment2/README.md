@@ -34,10 +34,10 @@ Supported formats: `.jpg`, `.png`, `.jpeg`, etc.
 Edit `prompts.csv` with the image-prompt pairs you want to test:
 
 ```csv
-image_filename,prompt,seed
-car.jpg,make the car red,42
-car.jpg,add a sunset background,43
-landscape.png,add more vibrant colors,44
+image_filename,prompt
+car.jpg,make the car red
+car.jpg,add a sunset background
+landscape.png,add more vibrant colors
 ```
 
 **CSV Format:**

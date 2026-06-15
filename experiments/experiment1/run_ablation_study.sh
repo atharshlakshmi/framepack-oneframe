@@ -16,7 +16,7 @@ set -e  # Exit on any error
 # ============================================================================
 # CONFIGURATION - Edit these to change sampling behavior
 # ============================================================================
-NUM_SAMPLES=10          # Number of images to sample (default: 10)
+NUM_SAMPLES=50          # Number of images to sample (default: 10)
 SEED=1234                 # Random seed for sampling (change this for different sets)
 # ============================================================================
 
